@@ -1,10 +1,14 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ScrapeRequest(BaseModel):
     url: str
+
+
+class BatchScrapeRequest(BaseModel):
+    urls: list[str] = Field(..., min_length=1)
 
 
 class PDPData(BaseModel):
@@ -32,6 +36,14 @@ class ScrapeResponse(BaseModel):
     status: str
     data: PDPData | None = None
     error: str | None = None
+
+
+class BatchScrapeItem(ScrapeResponse):
+    url: str
+
+
+class BatchScrapeResponse(BaseModel):
+    results: list[BatchScrapeItem]
 
 
 class AuthedKey(BaseModel):

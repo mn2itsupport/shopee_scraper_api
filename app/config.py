@@ -61,6 +61,12 @@ class Settings(BaseSettings):
 
     default_requests_per_minute: int = 30
 
+    # Cap on how many URLs a single POST /v1/{site_key}/pdp/batch call may
+    # request — each URL still costs one burst-limit slot and one quota unit,
+    # same as if it were its own request, so this bounds how much of a key's
+    # per-minute/daily budget one call can spend atomically.
+    max_batch_size: int = 20
+
     log_dir: str = "logs"
     log_file: str = "app.log"
     log_max_bytes: int = 10_000_000
