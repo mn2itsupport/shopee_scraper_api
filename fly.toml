@@ -1,0 +1,41 @@
+# Fly.io app config. Before first deploy:
+#   1. Change `app` below to a globally-unique name (fly apps create <name> first, or fly will prompt).
+#   2. `primary_region = "gru"` is Sao Paulo — closest to shopee.com.br and to most
+#      residential-proxy exit points in Brazil; change if you'd rather run elsewhere.
+app = "shopee-scraper-api"  # CHANGE ME — must be globally unique on Fly.io
+primary_region = "gru"
+
+[build]
+
+[env]
+  PLAYWRIGHT_HEADLESS = "true"
+  # Everything secret (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+  # ADMIN_DASHBOARD_PASSWORD, PROXY_*) is set via `fly secrets set`, not here —
+  # this [env] block is for non-secret values only.
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Keep exactly one machine always on: the burst rate limiter
+  # (app/core/rate_limiter.py) is an in-memory per-process dict, so scaling to
+  # multiple machines or letting Fly stop/cold-start machines on idle would
+  # silently break per-key rate limiting and add a slow Chromium-boot delay
+  # to whichever request wakes a stopped machine back up.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  # Headless Chromium is memory-hungry; with MAX_CONCURRENT_SCRAPES=3 several
+  # contexts can be open at once. 1GB is a floor, not a comfortable amount —
+  # bump to 2048 (and cpus to 2) if you see OOM kills in `fly logs`.
+  memory_mb = 1024

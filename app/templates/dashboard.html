@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{{ "Usage Dashboard (Admin)" if mode == "admin" else "My API Usage" }}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --page-plane:     #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --status-good:      #0ca30c;
+    --status-warning:   #fab219;
+    --status-serious:   #ec835a;
+    --status-critical:  #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --page-plane:     #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --status-good:      #0ca30c;
+      --status-warning:   #fab219;
+      --status-serious:   #ec835a;
+      --status-critical:  #d03b3b;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --page-plane:     #0d0d0d;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .viz-root {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding: 24px;
+  }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .subtitle { color: var(--text-secondary); font-size: 0.875rem; margin: 0 0 20px; }
+
+  .kpis { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .kpi {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; min-width: 160px;
+  }
+  .kpi .label { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 6px; }
+  .kpi .value { font-size: 1.75rem; font-variant-numeric: tabular-nums; }
+  .kpi .value.warn { color: var(--status-warning); }
+  .kpi .value.critical { color: var(--status-critical); }
+
+  .filters { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .filters button, .filters input {
+    font: inherit; font-size: 0.8125rem; padding: 6px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+    cursor: pointer;
+  }
+  .filters button[aria-pressed="true"] { border-color: var(--series-1); font-weight: 600; }
+  .filters input[type="date"] { cursor: text; }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 0.9375rem; margin: 0 0 12px; }
+  .card-header { display: flex; justify-content: space-between; align-items: baseline; }
+  .table-toggle { font-size: 0.75rem; color: var(--text-secondary); background: none; border: none; cursor: pointer; text-decoration: underline; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  th { color: var(--text-secondary); font-weight: 500; }
+
+  .status-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--gridline); font-size: 0.8125rem; }
+  .status-row:last-child { border-bottom: none; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .status-label { flex: 1; color: var(--text-secondary); }
+  .status-count { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  canvas { max-height: 280px; }
+  .empty { color: var(--text-muted); font-size: 0.8125rem; padding: 20px 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <h1>{{ "Usage Dashboard" if mode == "admin" else "My API Usage" }}</h1>
+  <p class="subtitle">{{ "All clients, aggregated from usage_logs" if mode == "admin" else "Scoped to your API key" }}</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="label">Requests today</div><div class="value" id="kpi-today">–</div></div>
+    <div class="kpi"><div class="label">Requests this month</div><div class="value" id="kpi-month">–</div></div>
+    <div class="kpi"><div class="label">CAPTCHA rate today</div><div class="value" id="kpi-captcha-today">–</div></div>
+    <div class="kpi"><div class="label">CAPTCHA rate this month</div><div class="value" id="kpi-captcha-month">–</div></div>
+  </div>
+
+  <div class="filters" role="group" aria-label="Date range">
+    <button data-range="7" aria-pressed="true">Last 7 days</button>
+    <button data-range="30">Last 30 days</button>
+    <button data-range="90">Last 90 days</button>
+    <span style="color: var(--text-muted); font-size: 0.8125rem;">or custom:</span>
+    <input type="date" id="range-start" />
+    <input type="date" id="range-end" />
+    <button id="range-apply">Apply</button>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Requests per day</h2>
+      <button class="table-toggle" id="daily-table-toggle">View as table</button>
+    </div>
+    <canvas id="daily-chart" role="img" aria-label="Line chart of requests per day for the selected range"></canvas>
+    <div id="daily-table-wrap" style="display:none;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Requests per month</h2>
+    <canvas id="monthly-chart" role="img" aria-label="Bar chart of requests per month"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>Outcome breakdown (selected range)</h2>
+    <div id="status-breakdown"></div>
+  </div>
+</div>
+
+<script>
+const MODE = {{ mode | tojson }};
+const API_KEY = {{ api_key | tojson }};
+const BASE = MODE === "admin" ? "/v1/dashboard/stats" : "/v1/dashboard/me";
+
+function withKey(url) {
+  if (MODE === "admin") return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}api_key=${encodeURIComponent(API_KEY)}`;
+}
+
+async function getJSON(url) {
+  const res = await fetch(withKey(url), { credentials: "same-origin" });
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json();
+}
+
+function isDark() {
+  const stamped = document.documentElement.getAttribute("data-theme");
+  if (stamped === "dark") return true;
+  if (stamped === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function tokens() {
+  const dark = isDark();
+  return {
+    series1: dark ? "#3987e5" : "#2a78d6",
+    grid: dark ? "#2c2c2a" : "#e1e0d9",
+    muted: "#898781",
+    text: dark ? "#ffffff" : "#0b0b0b",
+  };
+}
+
+let dailyChart, monthlyChart;
+
+function renderDaily(rows) {
+  const t = tokens();
+  const ctx = document.getElementById("daily-chart");
+  const data = {
+    labels: rows.map(r => r.date),
+    datasets: [{
+      label: "Requests",
+      data: rows.map(r => r.count),
+      borderColor: t.series1,
+      backgroundColor: t.series1,
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.15,
+    }],
+  };
+  const options = {
+    responsive: true,
+    plugins: { legend: { display: false }, tooltip: { intersect: false, mode: "index" } },
+    interaction: { intersect: false, mode: "index" },
+    scales: {
+      x: { grid: { color: t.grid }, ticks: { color: t.muted } },
+      y: { beginAtZero: true, grid: { color: t.grid }, ticks: { color: t.muted, precision: 0 } },
+    },
+  };
+  if (dailyChart) { dailyChart.data = data; dailyChart.options = options; dailyChart.update(); }
+  else dailyChart = new Chart(ctx, { type: "line", data, options });
+
+  renderDailyTable(rows);
+}
+
+function renderDailyTable(rows) {
+  const wrap = document.getElementById("daily-table-wrap");
+  if (!rows.length) { wrap.innerHTML = '<div class="empty">No data in this range.</div>'; return; }
+  const body = rows.map(r => `<tr><td>${r.date}</td><td>${r.count}</td></tr>`).join("");
+  wrap.innerHTML = `<table><thead><tr><th>Date</th><th>Requests</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderMonthly(rows) {
+  const t = tokens();
+  const ctx = document.getElementById("monthly-chart");
+  const data = {
+    labels: rows.map(r => r.month),
+    datasets: [{ label: "Requests", data: rows.map(r => r.count), backgroundColor: t.series1, borderRadius: 4 }],
+  };
+  const options = {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: t.muted } },
+      y: { beginAtZero: true, grid: { color: t.grid }, ticks: { color: t.muted, precision: 0 } },
+    },
+  };
+  if (monthlyChart) { monthlyChart.data = data; monthlyChart.options = options; monthlyChart.update(); }
+  else monthlyChart = new Chart(ctx, { type: "bar", data, options });
+}
+
+const STATUS_META = {
+  success:         { label: "Success",         color: "var(--status-good)" },
+  failed:          { label: "Failed",           color: "var(--status-critical)" },
+  captcha_blocked: { label: "CAPTCHA blocked",  color: "var(--status-serious)" },
+  rate_limited:    { label: "Rate limited",     color: "var(--status-warning)" },
+  quota_exceeded:  { label: "Quota exceeded",   color: "var(--status-warning)" },
+};
+
+function renderStatusBreakdown(rows) {
+  const el = document.getElementById("status-breakdown");
+  if (!rows.length) { el.innerHTML = '<div class="empty">No requests in this range.</div>'; return; }
+  el.innerHTML = rows.map(([status, count]) => {
+    const meta = STATUS_META[status] || { label: status, color: "var(--text-muted)" };
+    return `<div class="status-row">
+      <span class="status-dot" style="background:${meta.color}"></span>
+      <span class="status-label">${meta.label}</span>
+      <span class="status-count">${count}</span>
+    </div>`;
+  }).join("");
+}
+
+async function loadRange(days, start, end) {
+  const dailyUrl = start && end
+    ? `${BASE}/range?start=${start}T00:00:00Z&end=${end}T23:59:59Z`
+    : `${BASE}/daily?days=${days}`;
+  const statusUrl = start && end
+    ? `${BASE}/status?start=${start}T00:00:00Z&end=${end}T23:59:59Z`
+    : `${BASE}/status?days=${days}`;
+
+  const [rows, statusRows] = await Promise.all([getJSON(dailyUrl), getJSON(statusUrl)]);
+  renderDaily(rows.map(r => ({ date: r.date, count: r.count })));
+  renderStatusBreakdown(statusRows);
+}
+
+function renderCaptchaRate(elId, rate) {
+  const el = document.getElementById(elId);
+  el.textContent = `${rate}%`;
+  el.classList.remove("warn", "critical");
+  if (rate >= 20) el.classList.add("critical");
+  else if (rate >= 5) el.classList.add("warn");
+}
+
+async function loadKPIs() {
+  const kpis = await getJSON(`${BASE}/kpis`);
+  document.getElementById("kpi-today").textContent = kpis.today;
+  document.getElementById("kpi-month").textContent = kpis.month;
+  renderCaptchaRate("kpi-captcha-today", kpis.captcha_rate_today);
+  renderCaptchaRate("kpi-captcha-month", kpis.captcha_rate_month);
+}
+
+async function init() {
+  const buttons = document.querySelectorAll(".filters button[data-range]");
+  buttons.forEach(btn => btn.addEventListener("click", () => {
+    buttons.forEach(b => b.setAttribute("aria-pressed", "false"));
+    btn.setAttribute("aria-pressed", "true");
+    loadRange(Number(btn.dataset.range));
+  }));
+
+  document.getElementById("range-apply").addEventListener("click", () => {
+    const start = document.getElementById("range-start").value;
+    const end = document.getElementById("range-end").value;
+    if (start && end) {
+      buttons.forEach(b => b.setAttribute("aria-pressed", "false"));
+      loadRange(null, start, end);
+    }
+  });
+
+  document.getElementById("daily-table-toggle").addEventListener("click", () => {
+    const wrap = document.getElementById("daily-table-wrap");
+    const canvas = document.getElementById("daily-chart");
+    const showing = wrap.style.display !== "none";
+    wrap.style.display = showing ? "none" : "block";
+    canvas.style.display = showing ? "block" : "none";
+    document.getElementById("daily-table-toggle").textContent = showing ? "View as table" : "View as chart";
+  });
+
+  await Promise.all([loadRange(7), loadKPIs()]);
+  const monthly = await getJSON(`${BASE}/monthly?months=12`);
+  renderMonthly(monthly);
+}
+
+init();
+</script>
+</body>
+</html>

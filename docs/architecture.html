@@ -1,0 +1,556 @@
+<title>Scraper API Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --bg:            #f5f7f6;
+    --surface:       #ffffff;
+    --surface-sunk:  #eef1ef;
+    --ink:           #10161a;
+    --ink-2:         #4d5851;
+    --ink-3:         #838f88;
+    --line:          #dde3de;
+    --line-strong:   #c4cdc6;
+    --accent:        #0e8a7d;
+    --accent-ink:    #ffffff;
+    --accent-wash:   #e3f4f0;
+    --code-bg:       #101715;
+    --code-ink:      #d9e6de;
+    --code-accent:   #5fd9c4;
+    --amber:         #b9790a;
+    --amber-wash:    #f7ecd6;
+    --critical:      #c23434;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg:            #0b0f0e;
+      --surface:       #121917;
+      --surface-sunk:  #0e1413;
+      --ink:           #eef3f0;
+      --ink-2:         #a9b6ae;
+      --ink-3:         #6d7a73;
+      --line:          #23302c;
+      --line-strong:   #34433d;
+      --accent:        #35d6c4;
+      --accent-ink:    #06201c;
+      --accent-wash:   #12292a;
+      --code-bg:       #0a0f0e;
+      --code-ink:      #cfe3d9;
+      --code-accent:   #6ee6d2;
+      --amber:         #e0a530;
+      --amber-wash:    #2b230f;
+      --critical:      #e2635a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:            #0b0f0e;
+    --surface:       #121917;
+    --surface-sunk:  #0e1413;
+    --ink:           #eef3f0;
+    --ink-2:         #a9b6ae;
+    --ink-3:         #6d7a73;
+    --line:          #23302c;
+    --line-strong:   #34433d;
+    --accent:        #35d6c4;
+    --accent-ink:    #06201c;
+    --accent-wash:   #12292a;
+    --code-bg:       #0a0f0e;
+    --code-ink:      #cfe3d9;
+    --code-accent:   #6ee6d2;
+    --amber:         #e0a530;
+    --amber-wash:    #2b230f;
+    --critical:      #e2635a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  h1, h2, h3 { font-family: "Archivo", system-ui, sans-serif; text-wrap: balance; letter-spacing: -0.01em; }
+  code, pre, .mono { font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", monospace; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  .shell {
+    max-width: 1160px; margin: 0 auto; display: grid;
+    grid-template-columns: 250px minmax(0, 1fr); gap: 56px; padding: 40px 32px 96px;
+  }
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; gap: 24px; padding: 24px 20px 64px; }
+    .toc { position: static !important; }
+  }
+
+  .toc { position: sticky; top: 32px; align-self: start; display: flex; flex-direction: column; gap: 2px; }
+  .toc .kicker {
+    font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 12px;
+  }
+  .toc a { color: var(--ink-2); font-size: 13.5px; padding: 6px 10px; border-radius: 6px; }
+  .toc a:hover { color: var(--ink); text-decoration: none; background: var(--surface-sunk); }
+
+  header.title-block { grid-column: 1 / -1; max-width: 760px; margin-bottom: 8px; }
+  .doc-kicker {
+    font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .doc-kicker::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+  h1.doc-title { font-size: clamp(2rem, 4vw, 2.75rem); margin: 0 0 12px; font-weight: 700; }
+  .doc-sub { font-size: 1.0625rem; color: var(--ink-2); margin: 0; max-width: 64ch; }
+
+  main { max-width: 740px; min-width: 0; }
+  section { margin-bottom: 60px; scroll-margin-top: 24px; }
+  section > .step-label {
+    font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: 0.06em; color: var(--accent);
+    text-transform: uppercase; margin: 0 0 6px; display: block;
+  }
+  h2 { font-size: 1.5rem; margin: 0 0 6px; }
+  h2 + p.lede { color: var(--ink-2); margin: 0 0 20px; font-size: 0.98rem; max-width: 66ch; }
+  h3 { font-size: 1.08rem; margin: 26px 0 10px; }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  ul, ol { margin: 0 0 16px; padding-left: 1.3em; max-width: 66ch; }
+  li { margin-bottom: 6px; }
+  strong { font-weight: 600; }
+
+  pre {
+    background: var(--code-bg); color: var(--code-ink); border-radius: 10px;
+    padding: 14px 18px; overflow-x: auto; font-size: 12.5px; line-height: 1.55;
+    margin: 0 0 18px; border: 1px solid var(--line-strong);
+  }
+  code.inline {
+    background: var(--surface-sunk); border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 6px; font-size: 0.86em; color: var(--ink);
+  }
+
+  .table-wrap { overflow-x: auto; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+
+  figure { margin: 8px 0 26px; }
+  .diagram {
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px;
+    padding: 20px; overflow-x: auto;
+  }
+  .diagram svg { display: block; width: 100%; height: auto; color: var(--ink-2); }
+  .diagram svg text { fill: currentColor; }
+  .diagram .accent { color: var(--accent); }
+  .diagram .amber { color: var(--amber); }
+  figcaption { font-size: 0.85rem; color: var(--ink-3); margin-top: 10px; max-width: 62ch; }
+
+  .callout {
+    border: 1px solid var(--line-strong); border-left: 3px solid var(--accent);
+    background: var(--accent-wash); border-radius: 8px; padding: 14px 18px; margin: 0 0 20px;
+    font-size: 0.92rem; max-width: 66ch;
+  }
+  .callout.amber { border-left-color: var(--amber); background: var(--amber-wash); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .label { font-weight: 700; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; display: block; margin-bottom: 4px; }
+
+  .tag {
+    display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 11px; padding: 2px 8px;
+    border-radius: 5px; background: var(--surface-sunk); border: 1px solid var(--line); color: var(--ink-2); margin: 0 6px 6px 0;
+  }
+  footer { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 20px; color: var(--ink-3); font-size: 0.82rem; }
+</style>
+
+<div class="shell">
+  <header class="title-block">
+    <p class="doc-kicker">Scraper API &middot; Architecture &amp; Working Document</p>
+    <h1 class="doc-title">How the scraping service is built</h1>
+    <p class="doc-sub">Components, the path a request takes, the data model, and the mechanism that lets a second website plug in without touching the first. Companion to the Operator Manual.</p>
+  </header>
+
+  <nav class="toc" aria-label="Table of contents">
+    <p class="kicker">On this page</p>
+    <a href="#scope">Purpose &amp; scope</a>
+    <a href="#system">System architecture</a>
+    <a href="#components">Component reference</a>
+    <a href="#lifecycle">Request lifecycle</a>
+    <a href="#data-model">Data model</a>
+    <a href="#extensibility">Multi-site extensibility</a>
+    <a href="#limits">Rate limiting &amp; quota</a>
+    <a href="#captcha">CAPTCHA policy</a>
+    <a href="#security">Security notes</a>
+    <a href="#roadmap">Limitations &amp; roadmap</a>
+  </nav>
+
+  <main>
+    <section id="scope">
+      <span class="step-label">Purpose &amp; scope</span>
+      <h2>What this document is for</h2>
+      <p class="lede">The engineering reference for this service — read it before changing how a request is authenticated, scraped, stored, or billed.</p>
+      <p>The service sells subscription access to structured product-detail-page (PDP) data, starting with Shopee Brazil. Everything below is written to answer one question the code alone doesn't: <em>why does it work this way, and what happens if a piece is removed.</em> For step-by-step operating instructions (provisioning clients, reading the dashboard), see the <strong>Operator Manual</strong>.</p>
+    </section>
+
+    <section id="system">
+      <span class="step-label">01 — System architecture</span>
+      <h2>The five moving parts</h2>
+      <p class="lede">One FastAPI process holds four of them; Supabase is the only external dependency besides the target website itself.</p>
+
+      <figure>
+        <div class="diagram">
+          <svg viewBox="0 0 920 380" role="img" aria-label="A client sends a request through auth, rate limiting, and the scraper registry to the browser pool, which reaches the target site; results are stored in and served back from Supabase, which also feeds the dashboard.">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+            </defs>
+            <g font-size="17">
+              <rect x="16" y="150" width="110" height="56" rx="8" fill="none" stroke="currentColor"/>
+              <text x="71" y="182" text-anchor="middle">Client</text>
+
+              <rect x="176" y="60" width="150" height="240" rx="10" fill="none" stroke="currentColor"/>
+              <text x="251" y="40" text-anchor="middle" font-weight="600">FastAPI app</text>
+
+              <rect x="196" y="80" width="110" height="42" rx="7" fill="none" stroke="currentColor"/>
+              <text x="251" y="106" text-anchor="middle">Auth</text>
+
+              <rect x="196" y="140" width="110" height="42" rx="7" fill="none" stroke="currentColor"/>
+              <text x="251" y="166" text-anchor="middle">Rate + quota</text>
+
+              <rect x="196" y="200" width="110" height="42" rx="7" fill="none" stroke="currentColor"/>
+              <text x="251" y="226" text-anchor="middle">Site registry</text>
+
+              <rect x="196" y="256" width="110" height="34" rx="7" fill="none" stroke="currentColor"/>
+              <text x="251" y="278" text-anchor="middle" font-size="15">/dashboard</text>
+
+              <rect x="386" y="130" width="150" height="120" rx="10" class="accent" fill="none" stroke="currentColor" stroke-width="1.6"/>
+              <text x="461" y="110" text-anchor="middle" font-weight="600">Browser pool</text>
+              <text x="461" y="180" text-anchor="middle" font-size="15.5">Chromium contexts</text>
+              <text x="461" y="200" text-anchor="middle" font-size="15.5">capped by semaphore</text>
+
+              <rect x="596" y="130" width="140" height="60" rx="8" fill="none" stroke="currentColor"/>
+              <text x="666" y="156" text-anchor="middle">Site adapter</text>
+              <text x="666" y="176" text-anchor="middle" font-size="15">e.g. shopee_br</text>
+
+              <rect x="596" y="230" width="140" height="50" rx="8" fill="none" stroke="currentColor" stroke-dasharray="3 3"/>
+              <text x="666" y="253" text-anchor="middle" font-size="15.5">CAPTCHA check</text>
+              <text x="666" y="270" text-anchor="middle" font-size="14">retry w/ new context</text>
+
+              <rect x="796" y="130" width="108" height="60" rx="8" fill="none" stroke="currentColor"/>
+              <text x="850" y="156" text-anchor="middle">Target</text>
+              <text x="850" y="176" text-anchor="middle" font-size="15">shopee.com.br</text>
+
+              <rect x="386" y="300" width="150" height="64" rx="10" class="amber" fill="none" stroke="currentColor" stroke-width="1.6"/>
+              <text x="461" y="324" text-anchor="middle" font-weight="600">Supabase</text>
+              <text x="461" y="343" text-anchor="middle" font-size="15">usage_logs</text>
+              <text x="461" y="358" text-anchor="middle" font-size="15">pdp_data &middot; api_keys</text>
+
+              <line x1="126" y1="178" x2="196" y2="101" stroke="currentColor" marker-end="url(#arrow)"/>
+              <text x="150" y="132" font-size="15">POST /v1/&lbrace;site&rbrace;/pdp</text>
+
+              <line x1="306" y1="221" x2="386" y2="190" stroke="currentColor" marker-end="url(#arrow)"/>
+              <text x="316" y="203" font-size="14">acquire context</text>
+
+              <line x1="536" y1="175" x2="596" y2="160" stroke="currentColor" marker-end="url(#arrow)"/>
+              <line x1="666" y1="190" x2="666" y2="230" stroke="currentColor" marker-end="url(#arrow)"/>
+              <line x1="736" y1="160" x2="796" y2="160" stroke="currentColor" marker-end="url(#arrow)"/>
+              <text x="746" y="146" font-size="14">navigate</text>
+
+              <line x1="461" y1="250" x2="461" y2="300" stroke="currentColor" marker-end="url(#arrow)"/>
+              <text x="471" y="280" font-size="14">log + store</text>
+
+              <path d="M306,271 C346,271 346,332 386,332" fill="none" stroke="currentColor" marker-end="url(#arrow)"/>
+              <text x="308" y="303" font-size="14">read for charts</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption><strong>Fig. 1</strong> — Auth and rate-limiting gate every request before it reaches the browser pool; the dashboard reads the same <code class="inline">usage_logs</code> table that gating writes to, so usage shown to a client is exactly what was enforced against them.</figcaption>
+      </figure>
+    </section>
+
+    <section id="components">
+      <span class="step-label">02 — Component reference</span>
+      <h2>Where each responsibility lives</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Component</th><th>File</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td>Auth</td><td><code class="inline">app/core/auth.py</code></td><td>Hash + look up the API key; reject on missing, suspended, or expired</td></tr>
+            <tr><td>Rate limiter</td><td><code class="inline">app/core/rate_limiter.py</code></td><td>In-memory burst window; DB-backed daily/monthly quota</td></tr>
+            <tr><td>Usage logger</td><td><code class="inline">app/core/usage_logger.py</code></td><td>One row per request into <code class="inline">usage_logs</code>, win or lose</td></tr>
+            <tr><td>Browser pool</td><td><code class="inline">app/scrapers/browser_pool.py</code></td><td>One shared Chromium process; a fresh, isolated context per request; concurrency cap</td></tr>
+            <tr><td>Proxy provider</td><td><code class="inline">app/scrapers/proxy_provider.py</code></td><td>Pluggable proxy sourcing — static list today, swappable</td></tr>
+            <tr><td>CAPTCHA detector</td><td><code class="inline">app/scrapers/captcha.py</code></td><td>Recognizes anti-bot walls; never attempts to defeat them</td></tr>
+            <tr><td>Site registry</td><td><code class="inline">app/scrapers/registry.py</code></td><td>Maps <code class="inline">site_key</code> &rarr; adapter; owns the CAPTCHA retry loop</td></tr>
+            <tr><td>Site adapter</td><td><code class="inline">app/scrapers/sites/shopee_br.py</code></td><td>The only site-specific code — fetch + parse for one website</td></tr>
+            <tr><td>Dashboard API</td><td><code class="inline">app/routers/dashboard_api.py</code></td><td>Aggregates <code class="inline">usage_logs</code> into daily/monthly/range/status JSON</td></tr>
+            <tr><td>Admin CLI</td><td><code class="inline">scripts/manage_keys.py</code></td><td>Plan/client/key lifecycle — the manual substitute for billing</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="lifecycle">
+      <span class="step-label">03 — Request lifecycle</span>
+      <h2>What happens between the call and the response</h2>
+      <p class="lede">Six gates, in order — any one of them can end the request before it reaches the target site.</p>
+
+      <figure>
+        <div class="diagram">
+          <svg viewBox="0 0 660 680" role="img" aria-label="Flowchart: a request passes through key validity, subscription, and rate/quota checks, each able to exit early with an error code, then reaches scraping. A CAPTCHA check either passes through to a successful parse, loops back to scraping with a fresh browser context when retries remain, or exits as captcha_blocked once retries are exhausted. Both the success and failure paths converge on a single logging step.">
+            <defs>
+              <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+            </defs>
+            <g font-size="12.5">
+              <rect x="130" y="10" width="220" height="44" rx="8" fill="none" stroke="currentColor"/>
+              <text x="240" y="36" text-anchor="middle">Request arrives</text>
+
+              <rect x="130" y="90" width="220" height="44" rx="8" fill="none" stroke="currentColor"/>
+              <text x="240" y="116" text-anchor="middle">Key valid?</text>
+
+              <rect x="130" y="170" width="220" height="44" rx="8" fill="none" stroke="currentColor"/>
+              <text x="240" y="196" text-anchor="middle">Subscription active?</text>
+
+              <rect x="130" y="250" width="220" height="44" rx="8" fill="none" stroke="currentColor"/>
+              <text x="240" y="276" text-anchor="middle">Under rate + quota?</text>
+
+              <rect x="130" y="330" width="220" height="44" rx="8" class="accent" fill="none" stroke="currentColor" stroke-width="1.6"/>
+              <text x="240" y="356" text-anchor="middle">Scrape in browser pool</text>
+
+              <rect x="130" y="414" width="220" height="50" rx="8" fill="none" stroke="currentColor" stroke-dasharray="3 3"/>
+              <text x="240" y="435" text-anchor="middle">CAPTCHA wall hit?</text>
+              <text x="240" y="452" text-anchor="middle" font-size="10.5">detected via page/URL signature</text>
+
+              <rect x="430" y="90" width="170" height="44" rx="8" fill="none" stroke="currentColor"/>
+              <text x="515" y="106" text-anchor="middle" font-size="11.5">401</text>
+              <text x="515" y="122" text-anchor="middle" font-size="10.5">Invalid key</text>
+
+              <rect x="430" y="170" width="170" height="44" rx="8" fill="none" stroke="currentColor"/>
+              <text x="515" y="186" text-anchor="middle" font-size="11.5">403</text>
+              <text x="515" y="202" text-anchor="middle" font-size="10.5">Suspended / expired</text>
+
+              <rect x="430" y="250" width="170" height="44" rx="8" fill="none" stroke="currentColor"/>
+              <text x="515" y="266" text-anchor="middle" font-size="11.5">429</text>
+              <text x="515" y="282" text-anchor="middle" font-size="10.5">Rate or quota hit</text>
+
+              <rect x="40" y="520" width="210" height="50" rx="8" fill="none" stroke="currentColor"/>
+              <text x="145" y="541" text-anchor="middle" font-size="11.5">Parsed successfully</text>
+              <text x="145" y="557" text-anchor="middle" font-size="10.5">normalize &amp; store</text>
+
+              <rect x="310" y="520" width="210" height="50" rx="8" fill="none" stroke="currentColor"/>
+              <text x="415" y="541" text-anchor="middle" font-size="11.5">502</text>
+              <text x="415" y="557" text-anchor="middle" font-size="10.5">captcha_blocked</text>
+
+              <rect x="110" y="610" width="340" height="46" rx="8" fill="none" stroke="currentColor"/>
+              <text x="280" y="638" text-anchor="middle">Log outcome + store &rarr; respond</text>
+
+              <line x1="240" y1="54" x2="240" y2="90" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <line x1="240" y1="134" x2="240" y2="170" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <line x1="240" y1="214" x2="240" y2="250" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <line x1="240" y1="294" x2="240" y2="330" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <line x1="240" y1="374" x2="240" y2="414" stroke="currentColor" marker-end="url(#arrow2)"/>
+
+              <line x1="350" y1="112" x2="430" y2="112" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <text x="360" y="102" font-size="10.5">no</text>
+              <line x1="350" y1="192" x2="430" y2="192" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <text x="360" y="182" font-size="10.5">no</text>
+              <line x1="350" y1="272" x2="430" y2="272" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <text x="360" y="262" font-size="10.5">no</text>
+
+              <polyline points="350,439 580,439 580,352 350,352" fill="none" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <text x="450" y="429" font-size="10.5">retries left &rarr; new context, retry</text>
+
+              <line x1="215" y1="464" x2="155" y2="520" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <text x="60" y="497" font-size="10.5">no CAPTCHA</text>
+
+              <line x1="290" y1="464" x2="400" y2="520" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <text x="300" y="497" font-size="10.5">retries exhausted</text>
+
+              <line x1="155" y1="570" x2="205" y2="610" stroke="currentColor" marker-end="url(#arrow2)"/>
+              <line x1="405" y1="570" x2="355" y2="610" stroke="currentColor" marker-end="url(#arrow2)"/>
+            </g>
+          </svg>
+        </div>
+        <figcaption><strong>Fig. 2</strong> — The CAPTCHA branch is the only loop in the request path: it re-enters scraping with a brand-new browser context (and rotated proxy, if configured) rather than retrying inside the same blocked context, up to <code class="inline">CAPTCHA_MAX_RETRIES</code> times.</figcaption>
+      </figure>
+
+      <h3>Why a fresh context, not a retry in place</h3>
+      <p>A context that just got shown a CAPTCHA carries the cookies and fingerprint that triggered it. Reusing it would likely reproduce the same block; a new context (optionally through a different proxy) gives the retry an honest chance instead of guaranteeing a repeat failure.</p>
+    </section>
+
+    <section id="data-model">
+      <span class="step-label">04 — Data model</span>
+      <h2>Six tables, one flexible column</h2>
+      <p class="lede">Everything a client's usage and a scrape's result need to record — designed so a new website never needs a migration.</p>
+
+      <figure>
+        <div class="diagram">
+          <svg viewBox="0 0 900 260" role="img" aria-label="Entity diagram: clients and plans each feed api_keys; api_keys and sites feed usage_logs; usage_logs and sites feed pdp_data, which holds a raw JSON column for site-specific fields.">
+            <defs>
+              <marker id="arrow3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+            </defs>
+            <g font-size="15.5">
+              <rect x="10" y="10" width="130" height="40" rx="7" fill="none" stroke="currentColor"/>
+              <text x="75" y="35" text-anchor="middle">clients</text>
+              <rect x="10" y="100" width="130" height="40" rx="7" fill="none" stroke="currentColor"/>
+              <text x="75" y="125" text-anchor="middle">plans</text>
+
+              <rect x="210" y="55" width="140" height="40" rx="7" fill="none" stroke="currentColor"/>
+              <text x="280" y="80" text-anchor="middle">api_keys</text>
+
+              <rect x="210" y="180" width="140" height="40" rx="7" fill="none" stroke="currentColor"/>
+              <text x="280" y="205" text-anchor="middle">sites</text>
+
+              <rect x="450" y="110" width="150" height="44" rx="7" class="amber" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <text x="525" y="129" text-anchor="middle">usage_logs</text>
+              <text x="525" y="146" text-anchor="middle" font-size="13">every request, any outcome</text>
+
+              <rect x="690" y="90" width="180" height="80" rx="7" class="accent" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <text x="780" y="113" text-anchor="middle">pdp_data</text>
+              <text x="780" y="132" text-anchor="middle" font-size="13">title &middot; price &middot; rating</text>
+              <text x="780" y="150" text-anchor="middle" font-size="13" font-weight="600">raw jsonb</text>
+              <text x="780" y="165" text-anchor="middle" font-size="12">site-specific extras</text>
+
+              <line x1="140" y1="30" x2="210" y2="65" stroke="currentColor" marker-end="url(#arrow3)"/>
+              <line x1="140" y1="120" x2="210" y2="85" stroke="currentColor" marker-end="url(#arrow3)"/>
+              <line x1="350" y1="80" x2="450" y2="125" stroke="currentColor" marker-end="url(#arrow3)"/>
+              <line x1="350" y1="195" x2="450" y2="140" stroke="currentColor" marker-end="url(#arrow3)"/>
+              <line x1="600" y1="128" x2="690" y2="128" stroke="currentColor" marker-end="url(#arrow3)"/>
+              <text x="620" y="116" font-size="13">usage_log_id</text>
+              <path d="M350,205 C500,230 600,200 690,165" fill="none" stroke="currentColor" marker-end="url(#arrow3)"/>
+              <text x="470" y="238" font-size="13">site_id</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption><strong>Fig. 3</strong> — <code class="inline">pdp_data.raw</code> is the extension point: a new site's adapter puts whatever fields Shopee doesn't have there, so <code class="inline">sites</code> gaining a row is the only schema-level change a new website ever causes.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Table</th><th>Key columns</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code class="inline">plans</code></td><td><code class="inline">requests_per_minute</code>, <code class="inline">daily_quota</code>, <code class="inline">monthly_quota</code>, <code class="inline">duration_days</code></td><td>What a subscription tier buys</td></tr>
+            <tr><td><code class="inline">api_keys</code></td><td><code class="inline">key_hash</code>, <code class="inline">status</code>, <code class="inline">expires_at</code></td><td>Never stores the raw key — only its SHA-256 hash</td></tr>
+            <tr><td><code class="inline">sites</code></td><td><code class="inline">site_key</code>, <code class="inline">base_domain</code></td><td>One row per supported website</td></tr>
+            <tr><td><code class="inline">usage_logs</code></td><td><code class="inline">status</code>, <code class="inline">response_time_ms</code>, <code class="inline">created_at</code></td><td>Source of truth for both quota enforcement and the dashboard</td></tr>
+            <tr><td><code class="inline">pdp_data</code></td><td>common fields + <code class="inline">raw jsonb</code></td><td>The scraped product record itself</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="extensibility">
+      <span class="step-label">05 — Multi-site extensibility</span>
+      <h2>Why adding a website doesn't touch the core</h2>
+      <p class="lede">Auth, rate limiting, storage, and the dashboard are written against a <code class="inline">site_key</code> string and a normalized data shape — neither knows Shopee exists.</p>
+
+      <figure>
+        <div class="diagram">
+          <svg viewBox="0 0 760 220" role="img" aria-label="A generic core of auth, rate limiting, storage, and dashboard sits behind a registry; shopee_br plugs into the registry today, and a new site adapter plugs into the same registry without changing the core.">
+            <defs>
+              <marker id="arrow4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+            </defs>
+            <g font-size="13">
+              <rect x="20" y="20" width="260" height="180" rx="10" fill="none" stroke="currentColor"/>
+              <text x="150" y="44" text-anchor="middle" font-weight="600">Generic core</text>
+              <text x="150" y="90" text-anchor="middle" font-size="12.5">Auth</text>
+              <text x="150" y="114" text-anchor="middle" font-size="12.5">Rate limiting + quota</text>
+              <text x="150" y="138" text-anchor="middle" font-size="12.5">Storage schema</text>
+              <text x="150" y="162" text-anchor="middle" font-size="12.5">Dashboard</text>
+
+              <rect x="340" y="70" width="140" height="80" rx="8" class="accent" fill="none" stroke="currentColor" stroke-width="1.6"/>
+              <text x="410" y="98" text-anchor="middle" font-weight="600">Registry</text>
+              <text x="410" y="118" text-anchor="middle" font-size="11.5">site_key &rarr; adapter</text>
+
+              <rect x="560" y="20" width="180" height="50" rx="8" fill="none" stroke="currentColor"/>
+              <text x="650" y="42" text-anchor="middle" font-size="12.5">shopee_br adapter</text>
+              <text x="650" y="58" text-anchor="middle" font-size="11">live today</text>
+
+              <rect x="560" y="150" width="180" height="50" rx="8" fill="none" stroke="currentColor" stroke-dasharray="3 3"/>
+              <text x="650" y="172" text-anchor="middle" font-size="12.5">new_site adapter</text>
+              <text x="650" y="188" text-anchor="middle" font-size="11">implements BaseScraper</text>
+
+              <line x1="280" y1="110" x2="340" y2="110" stroke="currentColor" marker-end="url(#arrow4)"/>
+              <line x1="480" y1="95" x2="560" y2="55" stroke="currentColor" marker-end="url(#arrow4)"/>
+              <line x1="480" y1="125" x2="560" y2="165" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow4)"/>
+            </g>
+          </svg>
+        </div>
+        <figcaption><strong>Fig. 4</strong> — The dashed adapter is hypothetical: the registry is the only place that changes when it's added, and it's a one-line dictionary entry.</figcaption>
+      </figure>
+
+      <h3>The three steps</h3>
+      <ol>
+        <li>Insert a row into <code class="inline">sites</code> (<code class="inline">site_key</code>, <code class="inline">display_name</code>, <code class="inline">base_domain</code>).</li>
+        <li>Write <code class="inline">app/scrapers/sites/&lt;site&gt;.py</code> implementing <code class="inline">BaseScraper.fetch_pdp</code> — return the common fields, put anything site-specific in <code class="inline">raw</code>.</li>
+        <li>Add one line to <code class="inline">SCRAPER_REGISTRY</code> in <code class="inline">app/scrapers/registry.py</code>.</li>
+      </ol>
+      <p>The new site is immediately callable at <code class="inline">POST /v1/&lt;site_key&gt;/pdp</code>, billed and rate-limited by the same plans, and shows up in the same dashboard.</p>
+    </section>
+
+    <section id="limits">
+      <span class="step-label">06 — Rate limiting &amp; quota</span>
+      <h2>Two layers, two different lifetimes</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Layer</th><th>Enforced against</th><th>Storage</th><th>Survives a restart?</th></tr></thead>
+          <tbody>
+            <tr><td>Burst limit</td><td><code class="inline">requests_per_minute</code></td><td>In-memory sliding window, per key</td><td>No — resets on restart</td></tr>
+            <tr><td>Quota</td><td><code class="inline">daily_quota</code> / <code class="inline">monthly_quota</code></td><td><code class="inline">usage_logs</code> row count</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The burst limiter trades durability for zero DB round-trips on the hot path — losing a few seconds of window on restart is cheap; a DB read on every single request to enforce a per-minute cap would not be. Quota, which only needs checking once per request and must be correct across restarts and (eventually) multiple app instances, reads the same <code class="inline">usage_logs</code> table the dashboard does.</p>
+      <div class="callout">
+        <span class="label">Scaling to multiple instances</span>
+        <p>The burst limiter is a single process's in-memory dict — correct for one instance, wrong for three behind a load balancer (each would enforce its own window). Swap it for Redis <code class="inline">INCR</code>+<code class="inline">EXPIRE</code> behind the same <code class="inline">check_burst_limit</code> call site; nothing else changes.</p>
+      </div>
+    </section>
+
+    <section id="captcha">
+      <span class="step-label">07 — CAPTCHA policy</span>
+      <h2>Detect and back off, never defeat</h2>
+      <p>The service deliberately stops at <em>recognizing</em> a CAPTCHA/anti-bot wall — matching known page signatures and URL patterns — and retrying with a clean browser context. It does not attempt to solve challenges. <code class="inline">CaptchaSolver</code> in <code class="inline">app/scrapers/captcha.py</code> is a no-op hook left in place if a third-party solving service is ever wired in deliberately; that's a decision to make explicitly, not a default behavior.</p>
+      <p>After <code class="inline">CAPTCHA_MAX_RETRIES</code> fresh-context attempts, the request fails as <code class="inline">captcha_blocked</code> (HTTP <code class="inline">502</code>) rather than looping indefinitely.</p>
+    </section>
+
+    <section id="security">
+      <span class="step-label">08 — Security notes</span>
+      <h2>What's protected, and how</h2>
+      <ul>
+        <li><strong>API keys are never stored raw</strong> — only a SHA-256 hash. <code class="inline">create-key</code> prints the secret once; losing it means issuing a new one.</li>
+        <li><strong>The Supabase service-role key bypasses row-level security</strong> — it's a server-side secret, never sent to a client and never referenced from the dashboard's browser-side JavaScript.</li>
+        <li><strong>The admin dashboard is a separate trust boundary</strong> from a client's own key — HTTP Basic auth on <code class="inline">/dashboard</code> versus key-scoped access on <code class="inline">/dashboard/me</code>, so a leaked client key exposes only that one client's usage.</li>
+        <li><strong>Expiry is checked on every request</strong>, not by a background job — there's no window where a lapsed key still works because a cron hasn't run yet.</li>
+      </ul>
+    </section>
+
+    <section id="roadmap">
+      <span class="step-label">09 — Limitations &amp; roadmap</span>
+      <h2>Known gaps, in priority order</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Gap</th><th>Why it's acceptable for now</th><th>Upgrade path</th></tr></thead>
+          <tbody>
+            <tr><td>No billing integration</td><td>Manual CLI is fine at low client counts</td><td>Payment webhook calls the same functions <code class="inline">manage_keys.py</code> does</td></tr>
+            <tr><td>Single-instance rate limiter</td><td>One process handles current volume</td><td>Redis-backed counter, same call site</td></tr>
+            <tr><td>No proxy provider wired in</td><td>Low volume tolerates a single egress IP</td><td>Implement <code class="inline">ProxyProvider</code> for a rotating vendor</td></tr>
+            <tr><td>Dashboard aggregates in Python</td><td>Fine at MVP log volume</td><td>Postgres view/RPC once <code class="inline">usage_logs</code> grows large</td></tr>
+            <tr><td>Shopee's PDP JSON shape can drift</td><td>Adapter isolates the blast radius to one file</td><td>Re-inspect Shopee's current XHR calls; adjust <code class="inline">shopee_br.py</code>'s field mapping</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>Scraper API &middot; Architecture &amp; Working Document &middot; companion to the Operator Manual</footer>
+</div>
