@@ -1,0 +1,13 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+# Keep at 1: the burst rate limiter (app/core/rate_limiter.py) is an
+# in-memory per-process dict, so multiple replicas would silently break
+# per-key rate limiting. See fly.toml for the same constraint.
+numReplicas = 1
