@@ -11,7 +11,8 @@ class ShopeeVNScraper(ShopeeScraper):
     locale = "vi-VN"
     timezone_id = "Asia/Ho_Chi_Minh"
     geolocation = {"latitude": 10.8231, "longitude": 106.6297}
-    # not_found_signature left unset (unverified localized copy) — a
-    # nonexistent product still falls through to the HTML/DOM fallback
-    # instead of raising ScraperError; fill in once confirmed against a real
-    # dead product page, same as shopee_br.py's.
+    # Sourced from a real user report of a dead shopee.vn product link
+    # showing this exact phrase; not yet confirmed against a live response
+    # captured by this scraper itself — verify against a real dead product
+    # page and tighten/correct if it ever produces a false positive.
+    not_found_signature = "sản phẩm không tồn tại"
