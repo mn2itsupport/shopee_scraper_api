@@ -9,6 +9,12 @@ class ScraperError(Exception):
     """Raised for a failure that isn't a CAPTCHA/anti-bot wall (see CaptchaBlockedError)."""
 
 
+class ProductNotFoundError(ScraperError):
+    """Raised when the site confirms the product doesn't exist (dead/removed listing),
+    as opposed to an actual scrape failure — callers treat this as a successful scrape
+    with no data rather than an error."""
+
+
 class CaptchaBlockedError(Exception):
     """Raised when an adapter detects a CAPTCHA/anti-bot interstitial instead of real data."""
 

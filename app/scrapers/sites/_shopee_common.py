@@ -23,7 +23,7 @@ from playwright.async_api import BrowserContext, Route
 
 from app.config import settings
 from app.models.schemas import PDPData
-from app.scrapers.base import BaseScraper, CaptchaBlockedError, ScraperError
+from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError
 from app.scrapers.captcha import get_captcha_solver, is_captcha_html, is_captcha_page, strip_script_and_style
 
 _PDP_API_FRAGMENTS = ["pdp/get_pc", "/item/get"]
@@ -126,7 +126,7 @@ class ShopeeScraper(BaseScraper):
             return self._parse_ld_json_product(product, url)
 
         if self.not_found_signature and self.not_found_signature in strip_script_and_style(html).lower():
-            raise ScraperError("Shopee reports this product does not exist")
+            raise ProductNotFoundError("Shopee reports this product does not exist")
 
         return self._parse_html_fallback(html, url)
 

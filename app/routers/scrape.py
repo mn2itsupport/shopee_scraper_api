@@ -9,7 +9,7 @@ from app.core.usage_logger import log_usage
 from app.db.client import get_supabase
 from app.deps import get_site_id
 from app.models.schemas import AuthedKey, ScrapeRequest, ScrapeResponse
-from app.scrapers.base import CaptchaBlockedError, ScraperError
+from app.scrapers.base import CaptchaBlockedError, ProductNotFoundError, ScraperError
 from app.scrapers.registry import scrape_with_retries
 
 router = APIRouter(prefix="/v1", tags=["scrape"])
@@ -57,6 +57,11 @@ async def scrape_pdp(
     try:
         pdp = await scrape_with_retries(site_key, body.url)
         status = "success"
+    except ProductNotFoundError:
+        # The site confirmed the product doesn't exist (dead/removed listing)
+        # rather than the scrape itself failing — counts as a successful
+        # scrape with no data, not an error.
+        status = "success"
     except CaptchaBlockedError as exc:
         status = "captcha_blocked"
         error_message = str(exc)
@@ -70,6 +75,9 @@ async def scrape_pdp(
     if pdp is not None:
         await asyncio.to_thread(_insert_pdp_data, site_id, usage_log_id, pdp)
         return ScrapeResponse(status="success", data=pdp)
+
+    if status == "success":
+        return ScrapeResponse(status="success", data=None)
 
     status_code = 502 if status == "captcha_blocked" else 500
     raise HTTPException(status_code=status_code, detail=error_message or "Scrape failed")
