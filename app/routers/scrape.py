@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +15,7 @@ from app.scrapers.base import CaptchaBlockedError, ProductNotFoundError, Scraper
 from app.scrapers.registry import scrape_with_retries
 
 router = APIRouter(prefix="/v1", tags=["scrape"])
+logger = logging.getLogger(__name__)
 
 
 def _insert_pdp_data(site_id: str, usage_log_id: str | None, pdp) -> None:
@@ -39,41 +41,52 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
     logging) for one URL. Rate-limit/quota rejection is returned as a
     "rejected" item rather than raised, so a batch call can isolate one
     over-budget URL without failing every other URL in the same request.
+
+    Everything here is wrapped in a catch-all: a transient infra error (e.g.
+    Supabase dropping a connection under load) must fail only this one item,
+    never crash the whole batch — previously an unexpected exception (not a
+    ScraperError/CaptchaBlockedError/HTTPException) would propagate out of
+    asyncio.gather and 500 the entire request, taking down every other URL
+    in the same batch along with it.
     """
     try:
-        check_burst_limit(key.api_key_id, key.requests_per_minute)
-        await asyncio.to_thread(check_quota, key.api_key_id, key.daily_quota, key.monthly_quota)
-    except HTTPException as exc:
-        return BatchScrapeItem(url=url, status="rejected", error=str(exc.detail))
+        try:
+            check_burst_limit(key.api_key_id, key.requests_per_minute)
+            await asyncio.to_thread(check_quota, key.api_key_id, key.daily_quota, key.monthly_quota)
+        except HTTPException as exc:
+            return BatchScrapeItem(url=url, status="rejected", error=str(exc.detail))
 
-    started = time.monotonic()
-    status = "failed"
-    error_message: str | None = None
-    pdp = None
-
-    try:
-        pdp = await scrape_with_retries(site_key, url)
-        status = "success"
-    except ProductNotFoundError:
-        # The site confirmed the product doesn't exist (dead/removed listing)
-        # rather than the scrape itself failing — counts as a successful
-        # scrape with no data, not an error.
-        status = "success"
-    except CaptchaBlockedError as exc:
-        status = "captcha_blocked"
-        error_message = str(exc)
-    except ScraperError as exc:
+        started = time.monotonic()
         status = "failed"
-        error_message = str(exc)
-    finally:
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        usage_log_id = await asyncio.to_thread(log_usage, key.api_key_id, site_id, url, status, elapsed_ms)
+        error_message: str | None = None
+        pdp = None
 
-    if pdp is not None:
-        await asyncio.to_thread(_insert_pdp_data, site_id, usage_log_id, pdp)
-        return BatchScrapeItem(url=url, status="success", data=pdp)
+        try:
+            pdp = await scrape_with_retries(site_key, url)
+            status = "success"
+        except ProductNotFoundError:
+            # The site confirmed the product doesn't exist (dead/removed listing)
+            # rather than the scrape itself failing — counts as a successful
+            # scrape with no data, not an error.
+            status = "success"
+        except CaptchaBlockedError as exc:
+            status = "captcha_blocked"
+            error_message = str(exc)
+        except ScraperError as exc:
+            status = "failed"
+            error_message = str(exc)
+        finally:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            usage_log_id = await asyncio.to_thread(log_usage, key.api_key_id, site_id, url, status, elapsed_ms)
 
-    return BatchScrapeItem(url=url, status=status, error=error_message)
+        if pdp is not None:
+            await asyncio.to_thread(_insert_pdp_data, site_id, usage_log_id, pdp)
+            return BatchScrapeItem(url=url, status="success", data=pdp)
+
+        return BatchScrapeItem(url=url, status=status, error=error_message)
+    except Exception as exc:
+        logger.exception("Unexpected error scraping %s", url)
+        return BatchScrapeItem(url=url, status="failed", error=f"Unexpected error: {exc}")
 
 
 @router.post("/{site_key}/pdp", response_model=ScrapeResponse)
