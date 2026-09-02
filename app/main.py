@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
@@ -9,7 +10,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.routers import dashboard_api, dashboard_pages, scrape
-from app.scrapers import browser_pool
+from app.scrapers import browser_pool, http_pool
 
 # uvicorn only configures its own "uvicorn"/"uvicorn.error"/"uvicorn.access"
 # loggers — app.* loggers (e.g. shopee_login, browser_pool) have no handler
@@ -41,11 +42,20 @@ if sys.platform == "win32":
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Every request offloads a few synchronous Supabase calls (quota check,
+    # usage log, pdp_data insert) via asyncio.to_thread onto this loop's
+    # default executor. Python's default size (min(32, cpu_count+4)) becomes
+    # a real queueing bottleneck once dozens of requests are in flight
+    # concurrently — size it to actually track MAX_CONCURRENT_SCRAPES-scale
+    # throughput instead.
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=100))
+    http_pool.startup()
     await browser_pool.startup()
     try:
         yield
     finally:
         await browser_pool.shutdown()
+        await http_pool.shutdown()
 
 
 app = FastAPI(title="Scraper API", version="0.1.0", lifespan=lifespan)

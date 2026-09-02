@@ -25,6 +25,7 @@ from app.config import settings
 from app.models.schemas import PDPData
 from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError
 from app.scrapers.captcha import get_captcha_solver, is_captcha_html, is_captcha_page, strip_script_and_style
+from app.scrapers.http_pool import get_client
 
 _PDP_API_FRAGMENTS = ["pdp/get_pc", "/item/get"]
 _URL_ID_PATTERN = re.compile(r"-i\.(\d+)\.(\d+)")
@@ -95,13 +96,12 @@ class ShopeeScraper(BaseScraper):
 
     async def fetch_pdp_via_unlocker_api(self, url: str) -> PDPData:
         try:
-            async with httpx.AsyncClient(timeout=settings.scrape_timeout_seconds) as client:
-                resp = await client.post(
-                    _UNLOCKER_API_URL,
-                    headers={"Authorization": f"Bearer {settings.brightdata_api_token}"},
-                    json={"zone": settings.brightdata_unlocker_zone, "url": url, "format": "raw"},
-                )
-                resp.raise_for_status()
+            resp = await get_client().post(
+                _UNLOCKER_API_URL,
+                headers={"Authorization": f"Bearer {settings.brightdata_api_token}"},
+                json={"zone": settings.brightdata_unlocker_zone, "url": url, "format": "raw"},
+            )
+            resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise ScraperError(f"Web Unlocker API request failed: {exc}") from exc
 
