@@ -70,8 +70,8 @@ class Settings(BaseSettings):
     # Shared httpx.AsyncClient pool sizing for fetch_pdp_via_unlocker_api
     # (app/scrapers/http_pool.py) — bump these alongside MAX_CONCURRENT_SCRAPES
     # if running many concurrent Web Unlocker calls at once.
-    http_pool_max_connections: int = 200
-    http_pool_max_keepalive: int = 50
+    http_pool_max_connections: int = 600
+    http_pool_max_keepalive: int = 100
 
     log_dir: str = "logs"
     log_file: str = "app.log"
