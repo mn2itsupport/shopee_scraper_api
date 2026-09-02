@@ -103,7 +103,13 @@ class ShopeeScraper(BaseScraper):
             )
             resp.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ScraperError(f"Web Unlocker API request failed: {exc}") from exc
+            # httpx's own timeout/connect exceptions frequently carry no
+            # message (str(exc) == ""), which used to produce an unhelpful
+            # "Web Unlocker API request failed: " with nothing after the
+            # colon — fall back to the exception's class name so the failure
+            # mode (ReadTimeout vs ConnectError vs ...) is still visible.
+            detail = str(exc) or type(exc).__name__
+            raise ScraperError(f"Web Unlocker API request failed: {detail}") from exc
 
         # Bright Data reports a failed proxy leg (auth, suspended account,
         # target unreachable, ...) as HTTP 200 with an empty body and the
