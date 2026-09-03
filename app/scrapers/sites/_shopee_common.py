@@ -115,12 +115,27 @@ class ShopeeScraper(BaseScraper):
                 json=payload,
             )
             resp.raise_for_status()
+        except httpx.TimeoutException as exc:
+            # Confirmed (shopee_vn) that our own client-side timeout
+            # (SCRAPE_TIMEOUT_SECONDS) routinely fires before Bright Data's
+            # own ~90s-160s internal deadline on a page it can't unlock —
+            # probed directly against Bright Data with a much longer client
+            # timeout, the same request eventually comes back with
+            # x-brd-error: 'waiting for selector "..." failed: timeout ...
+            # exceeded', i.e. Shopee's anti-bot wall stalling the render, the
+            # same failure CaptchaBlockedError exists for. Route it through
+            # that retry path (fresh context, rotated proxy, backoff) instead
+            # of failing immediately and non-retryably.
+            raise CaptchaBlockedError(
+                f"Web Unlocker API request timed out ({type(exc).__name__}) — likely Shopee's anti-bot wall "
+                "stalling the render rather than a real connectivity failure"
+            ) from exc
         except httpx.HTTPError as exc:
-            # httpx's own timeout/connect exceptions frequently carry no
+            # httpx's own connect/protocol exceptions frequently carry no
             # message (str(exc) == ""), which used to produce an unhelpful
             # "Web Unlocker API request failed: " with nothing after the
             # colon — fall back to the exception's class name so the failure
-            # mode (ReadTimeout vs ConnectError vs ...) is still visible.
+            # mode (ConnectError vs ...) is still visible.
             detail = str(exc) or type(exc).__name__
             raise ScraperError(f"Web Unlocker API request failed: {detail}") from exc
 
@@ -131,6 +146,11 @@ class ShopeeScraper(BaseScraper):
         # as a "fallback" scrape result instead of a clear failure.
         brd_error = resp.headers.get("x-brd-error")
         if brd_error:
+            if "waiting for selector" in brd_error.lower():
+                # Same anti-bot-wall-stall signature as the TimeoutException
+                # branch above, just observed within our own timeout window
+                # instead of past it — same retry treatment.
+                raise CaptchaBlockedError(f"Shopee showed a verification/anti-bot wall: {brd_error}")
             raise ScraperError(f"Web Unlocker API request failed: {brd_error}")
 
         html = resp.text
