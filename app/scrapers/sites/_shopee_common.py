@@ -55,6 +55,23 @@ _PDP_FETCH_ERROR = re.compile(r'"setPdpBffData":\{[^}]*"isError":true,"error":\{
 _MFE_INITIAL_DATA_BLOCK = re.compile(
     r'<script[^>]+type="text/mfe-initial-data"[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL
 )
+# Shopee also accepts an alternate PDP URL shape, /product/<shop_id>/<item_id>
+# (no product slug, no "-i." marker) — same product, but Shopee's own server
+# redirects it to the canonical "-i." URL before serving the page. Confirmed
+# (shopee_vn) that redirect chain is much harder for the Web Unlocker to
+# render: the canonical "-i." URL for the same item succeeds in 5-20s, while
+# this format timed out on every one of 3 attempts (~236s) before giving up.
+# Rewrite it to the canonical shape up front rather than pay that redirect
+# cost on every request.
+_ALT_PRODUCT_PATH_URL = re.compile(r"^(https?://[^/]+)/product/(\d+)/(\d+)(?:[/?#].*)?$", re.IGNORECASE)
+
+
+def _normalize_shopee_url(url: str) -> str:
+    match = _ALT_PRODUCT_PATH_URL.match(url)
+    if not match:
+        return url
+    origin, shop_id, item_id = match.groups()
+    return f"{origin}/product-i.{shop_id}.{item_id}"
 
 
 class ShopeeScraper(BaseScraper):
@@ -73,6 +90,7 @@ class ShopeeScraper(BaseScraper):
     not_found_signature: str = ""
 
     async def fetch_pdp(self, context: BrowserContext, url: str) -> PDPData:
+        url = _normalize_shopee_url(url)
         captured: dict = {}
 
         async def handle_pdp_route(route: Route) -> None:
@@ -119,6 +137,7 @@ class ShopeeScraper(BaseScraper):
             await page.close()
 
     async def fetch_pdp_via_unlocker_api(self, url: str) -> PDPData:
+        url = _normalize_shopee_url(url)
         payload = {"zone": settings.brightdata_unlocker_zone, "url": url, "format": "raw"}
         if self.unlocker_country:
             payload["country"] = self.unlocker_country
