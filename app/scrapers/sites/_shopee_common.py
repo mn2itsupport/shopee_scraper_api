@@ -31,6 +31,16 @@ _PDP_API_FRAGMENTS = ["pdp/get_pc", "/item/get"]
 _URL_ID_PATTERN = re.compile(r"-i\.(\d+)\.(\d+)")
 _UNLOCKER_API_URL = "https://api.brightdata.com/request"
 _LD_JSON_BLOCK = re.compile(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
+# The unlocker/raw transport's PDP page embeds its own client-side fetch
+# state (Shopee's "PDP BFF" call) in a <script type="text/mfe-initial-data">
+# block. For a nonexistent shop_id/item_id, Shopee still serves the product
+# page *shell* (not a redirect, not its own "not found" copy) but this fetch
+# comes back with isError:true and a numeric error code — confirmed against
+# a fabricated shopee_vn item_id (error code 266900002). Checking for the
+# item_id's mere presence in the HTML doesn't work as a not-found signal:
+# Shopee's own bootstrap state echoes the requested shop_id/item_id from the
+# URL regardless of whether the fetch behind them succeeded.
+_PDP_FETCH_ERROR = re.compile(r'"setPdpBffData":\{[^}]*"isError":true,"error":\{[^}]*"error":(\d+)')
 
 
 class ShopeeScraper(BaseScraper):
@@ -95,11 +105,14 @@ class ShopeeScraper(BaseScraper):
             await page.close()
 
     async def fetch_pdp_via_unlocker_api(self, url: str) -> PDPData:
+        payload = {"zone": settings.brightdata_unlocker_zone, "url": url, "format": "raw"}
+        if self.unlocker_country:
+            payload["country"] = self.unlocker_country
         try:
             resp = await get_client().post(
                 _UNLOCKER_API_URL,
                 headers={"Authorization": f"Bearer {settings.brightdata_api_token}"},
-                json={"zone": settings.brightdata_unlocker_zone, "url": url, "format": "raw"},
+                json=payload,
             )
             resp.raise_for_status()
         except httpx.HTTPError as exc:
@@ -189,6 +202,17 @@ class ShopeeScraper(BaseScraper):
         og_desc_match = re.search(
             r'<meta[^>]+property="og:description"[^>]+content="([^"]*)"', html, re.IGNORECASE
         )
+
+        pdp_fetch_error = _PDP_FETCH_ERROR.search(html)
+        if pdp_fetch_error:
+            # Confirmed failure, not just missing data — see _PDP_FETCH_ERROR's
+            # comment. Without this check, this case would fall through to a
+            # "success" whose title/raw are just the page shell's own generic
+            # copy, not real product data.
+            raise ScraperError(
+                f"Shopee's own PDP data fetch failed for this item (error code {pdp_fetch_error.group(1)}) "
+                "— dead/invalid item_id or shop_id in the URL"
+            )
 
         match = _URL_ID_PATTERN.search(url)
         external_id = f"{match.group(1)}.{match.group(2)}" if match else None

@@ -36,6 +36,15 @@ class BaseScraper(ABC):
     locale: str = "en-US"
     timezone_id: str = "UTC"
     geolocation: dict | None = None
+    # Two-letter country code passed as the Web Unlocker API's "country" param
+    # (brightdata_unlocker_api mode only) so Bright Data exits through that
+    # country's residential IPs instead of auto-picking — for some targets
+    # (confirmed: shopee.co.th) an auto-picked exit IP gets flagged by the
+    # site's anti-bot layer and the Unlocker never renders a real page even
+    # after 90s+, while forcing the matching country resolves in ~15s. Leave
+    # "" to let Bright Data auto-select (fine for targets that don't need it,
+    # e.g. shopee.com.br).
+    unlocker_country: str = ""
 
     @abstractmethod
     async def fetch_pdp(self, context: BrowserContext, url: str) -> PDPData:

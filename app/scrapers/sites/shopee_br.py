@@ -11,4 +11,5 @@ class ShopeeBRScraper(ShopeeScraper):
     locale = "pt-BR"
     timezone_id = "America/Sao_Paulo"
     geolocation = {"latitude": -23.5505, "longitude": -46.6333}
+    unlocker_country = "br"
     not_found_signature = "o produto não existe"
