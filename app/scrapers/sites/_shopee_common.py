@@ -41,6 +41,20 @@ _LD_JSON_BLOCK = re.compile(r'<script[^>]+application/ld\+json[^>]*>(.*?)</scrip
 # Shopee's own bootstrap state echoes the requested shop_id/item_id from the
 # URL regardless of whether the fetch behind them succeeded.
 _PDP_FETCH_ERROR = re.compile(r'"setPdpBffData":\{[^}]*"isError":true,"error":\{[^}]*"error":(\d+)')
+# Same <script type="text/mfe-initial-data"> block also carries the actual
+# item data Shopee's frontend fetched, at
+# initialState.DOMAIN_PDP.data.PDP_BFF_DATA.cachedMap["<shop_id>/<item_id>"].item
+# — the same item shape _parse_api_body() gets from the live pdp/get_pc XHR
+# (browser transport), just server-embedded instead of a live network
+# response. Confirmed present on both shopee_th and shopee_vn pages that
+# have no ld+json Product block, so this is a strictly better source than
+# the <title>/og:description-only fallback: it has the real title and image
+# ids even when price/rating/sold are nulled out (confirmed on both
+# countries — Shopee withholds those specific fields from this transport
+# regardless of item validity, not something fixable client-side).
+_MFE_INITIAL_DATA_BLOCK = re.compile(
+    r'<script[^>]+type="text/mfe-initial-data"[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL
+)
 
 
 class ShopeeScraper(BaseScraper):
@@ -164,10 +178,54 @@ class ShopeeScraper(BaseScraper):
         if product is not None:
             return self._parse_ld_json_product(product, url)
 
+        pdp_fetch_error = _PDP_FETCH_ERROR.search(html)
+        if pdp_fetch_error:
+            # Confirmed failure, not just missing data — see _PDP_FETCH_ERROR's
+            # comment. Without this check, this case would fall through to a
+            # "success" whose title/raw are just the page shell's own generic
+            # copy, not real product data.
+            raise ScraperError(
+                f"Shopee's own PDP data fetch failed for this item (error code {pdp_fetch_error.group(1)}) "
+                "— dead/invalid item_id or shop_id in the URL"
+            )
+
+        bff_item = self._extract_pdp_bff_item(html, url)
+        if bff_item is not None:
+            return self._parse_api_body({"data": {"item": bff_item}}, url)
+
         if self.not_found_signature and self.not_found_signature in strip_script_and_style(html).lower():
             raise ProductNotFoundError("Shopee reports this product does not exist")
 
         return self._parse_html_fallback(html, url)
+
+    def _extract_pdp_bff_item(self, html: str, url: str) -> dict | None:
+        match = _URL_ID_PATTERN.search(url)
+        cache_key = f"{match.group(1)}.{match.group(2)}" if match else None
+
+        for block in _MFE_INITIAL_DATA_BLOCK.finditer(html):
+            if '"PDP_BFF_DATA"' not in block.group(1):
+                continue
+            try:
+                data = json.loads(block.group(1))
+            except json.JSONDecodeError:
+                continue
+            try:
+                cached_map = data["initialState"]["DOMAIN_PDP"]["data"]["PDP_BFF_DATA"]["cachedMap"]
+            except (KeyError, TypeError):
+                continue
+            if not cached_map:
+                continue
+            # Cache key format confirmed as "<shop_id>/<item_id>" (note: "/",
+            # not the "." used in our own external_product_id) — fall back to
+            # the sole entry if the URL's ids don't match any key (defensive;
+            # not observed in testing).
+            entry = cached_map.get(cache_key.replace(".", "/")) if cache_key else None
+            if entry is None and len(cached_map) == 1:
+                entry = next(iter(cached_map.values()))
+            item = (entry or {}).get("item")
+            if item:
+                return item
+        return None
 
     def _extract_ld_json_product(self, html: str) -> dict | None:
         # Shopee embeds standard schema.org Product structured data for SEO —
@@ -222,17 +280,6 @@ class ShopeeScraper(BaseScraper):
         og_desc_match = re.search(
             r'<meta[^>]+property="og:description"[^>]+content="([^"]*)"', html, re.IGNORECASE
         )
-
-        pdp_fetch_error = _PDP_FETCH_ERROR.search(html)
-        if pdp_fetch_error:
-            # Confirmed failure, not just missing data — see _PDP_FETCH_ERROR's
-            # comment. Without this check, this case would fall through to a
-            # "success" whose title/raw are just the page shell's own generic
-            # copy, not real product data.
-            raise ScraperError(
-                f"Shopee's own PDP data fetch failed for this item (error code {pdp_fetch_error.group(1)}) "
-                "— dead/invalid item_id or shop_id in the URL"
-            )
 
         match = _URL_ID_PATTERN.search(url)
         external_id = f"{match.group(1)}.{match.group(2)}" if match else None
