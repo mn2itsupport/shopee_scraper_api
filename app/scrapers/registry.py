@@ -43,7 +43,9 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
                 # No browser context needed — this transport is a single
                 # server-side-rendered HTTP call.
                 return await scraper.fetch_pdp_via_unlocker_api(url)
-            async with acquire_context(scraper.locale, scraper.timezone_id, scraper.geolocation) as context:
+            async with acquire_context(
+                scraper.locale, scraper.timezone_id, scraper.geolocation, scraper.unlocker_country
+            ) as context:
                 return await scraper.fetch_pdp(context, url)
         except CaptchaBlockedError as exc:
             last_error = exc

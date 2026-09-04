@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     brightdata_unlocker_zone: str = ""
     brightdata_unlocker_password: str = ""
 
+    # "brightdata_residential" PROXY_MODE: a static residential/ISP proxy
+    # zone (distinct from the Unlocker zone above), country-targeted per
+    # request via a "-country-<cc>" username suffix built from each site
+    # adapter's unlocker_country. Only takes effect when BROWSER_MODE=local.
+    brightdata_residential_zone: str = ""
+    brightdata_residential_password: str = ""
+
     # Optional: log into a real Shopee account once at startup and reuse that
     # session (cookies/localStorage) across scrape contexts instead of
     # scraping anonymously. Login failure is non-fatal — falls back to

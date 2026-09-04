@@ -60,10 +60,11 @@ async def shutdown() -> None:
 class ManagedContext:
     """Async context manager: acquires a concurrency slot and yields a fresh, isolated BrowserContext."""
 
-    def __init__(self, locale: str, timezone_id: str, geolocation: dict | None) -> None:
+    def __init__(self, locale: str, timezone_id: str, geolocation: dict | None, country: str = "") -> None:
         self._locale = locale
         self._timezone_id = timezone_id
         self._geolocation = geolocation
+        self._country = country
         self._context: BrowserContext | None = None
 
     async def __aenter__(self) -> BrowserContext:
@@ -78,7 +79,7 @@ class ManagedContext:
                 # overrides here would just fight its own patches.
                 self._context = await _browser.new_context(locale=self._locale, storage_state=storage_state)
             else:
-                proxy = get_proxy_provider().next_proxy()
+                proxy = get_proxy_provider().next_proxy(country=self._country)
                 self._context = await _browser.new_context(
                     user_agent=random.choice(_USER_AGENTS),
                     viewport={"width": 1366, "height": 768},
@@ -106,5 +107,7 @@ class ManagedContext:
         _semaphore.release()
 
 
-def acquire_context(locale: str = "en-US", timezone_id: str = "UTC", geolocation: dict | None = None) -> ManagedContext:
-    return ManagedContext(locale, timezone_id, geolocation)
+def acquire_context(
+    locale: str = "en-US", timezone_id: str = "UTC", geolocation: dict | None = None, country: str = ""
+) -> ManagedContext:
+    return ManagedContext(locale, timezone_id, geolocation, country)

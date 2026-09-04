@@ -9,6 +9,11 @@
   3. "brightdata_unlocker" — Bright Data's Web Unlocker product as a forward
      proxy (BRIGHTDATA_CUSTOMER_ID / BRIGHTDATA_UNLOCKER_ZONE /
      BRIGHTDATA_UNLOCKER_PASSWORD). Only takes effect under BROWSER_MODE=local.
+  4. "brightdata_residential" — a static residential/ISP proxy zone
+     (BRIGHTDATA_CUSTOMER_ID / BRIGHTDATA_RESIDENTIAL_ZONE /
+     BRIGHTDATA_RESIDENTIAL_PASSWORD), country-targeted per request via a
+     "-country-<cc>" username suffix built from the site adapter's
+     unlocker_country. Only takes effect under BROWSER_MODE=local.
 
 Wire up something else entirely by subclassing ProxyProvider and swapping it
 into get_proxy_provider().
@@ -25,8 +30,12 @@ from app.config import settings
 
 class ProxyProvider(ABC):
     @abstractmethod
-    def next_proxy(self) -> dict | None:
-        """Return a Playwright-compatible proxy dict (`{"server", "username"?, "password"?}`) or None for no proxy."""
+    def next_proxy(self, country: str = "") -> dict | None:
+        """Return a Playwright-compatible proxy dict (`{"server", "username"?, "password"?}`) or None for no proxy.
+
+        `country` is the target site's two-letter unlocker_country (e.g. "th") —
+        only providers that support per-request country targeting use it.
+        """
         raise NotImplementedError
 
 
@@ -49,7 +58,7 @@ class StaticListProxyProvider(ProxyProvider):
     def __init__(self, proxy_urls: list[str]):
         self._cycle = itertools.cycle(proxy_urls) if proxy_urls else None
 
-    def next_proxy(self) -> dict | None:
+    def next_proxy(self, country: str = "") -> dict | None:
         if self._cycle is None:
             return None
         return _parse_proxy_url(next(self._cycle))
@@ -61,7 +70,7 @@ class RotatingSessionProxyProvider(ProxyProvider):
         self._username_template = username_template
         self._password = password
 
-    def next_proxy(self) -> dict:
+    def next_proxy(self, country: str = "") -> dict:
         session_id = secrets.token_hex(4)
         return {
             "server": self._server,
@@ -85,8 +94,29 @@ class BrightDataUnlockerProxyProvider(ProxyProvider):
         self._username = f"brd-customer-{customer_id}-zone-{zone}"
         self._password = password
 
-    def next_proxy(self) -> dict:
+    def next_proxy(self, country: str = "") -> dict:
         return {"server": self._SERVER, "username": self._username, "password": self._password}
+
+
+class BrightDataResidentialProxyProvider(ProxyProvider):
+    """A static residential/ISP Bright Data zone, targeted per request via a
+    "-country-<cc>" username suffix — unlike BrightDataUnlockerProxyProvider,
+    the exit country varies per site adapter rather than being fixed for the
+    whole zone, so next_proxy() takes it as a parameter.
+    """
+
+    _SERVER = "http://brd.superproxy.io:44445"
+
+    def __init__(self, customer_id: str, zone: str, password: str):
+        self._customer_id = customer_id
+        self._zone = zone
+        self._password = password
+
+    def next_proxy(self, country: str = "") -> dict:
+        username = f"brd-customer-{self._customer_id}-zone-{self._zone}"
+        if country:
+            username += f"-country-{country}"
+        return {"server": self._SERVER, "username": username, "password": self._password}
 
 
 @lru_cache
@@ -104,5 +134,11 @@ def get_proxy_provider() -> ProxyProvider:
             customer_id=settings.brightdata_customer_id,
             zone=settings.brightdata_unlocker_zone,
             password=settings.brightdata_unlocker_password,
+        )
+    if settings.proxy_mode == "brightdata_residential":
+        return BrightDataResidentialProxyProvider(
+            customer_id=settings.brightdata_customer_id,
+            zone=settings.brightdata_residential_zone,
+            password=settings.brightdata_residential_password,
         )
     return StaticListProxyProvider(settings.proxies)
