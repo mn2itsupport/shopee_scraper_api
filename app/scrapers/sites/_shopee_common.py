@@ -199,11 +199,13 @@ class ShopeeScraper(BaseScraper):
 
         pdp_fetch_error = _PDP_FETCH_ERROR.search(html)
         if pdp_fetch_error:
-            # Confirmed failure, not just missing data — see _PDP_FETCH_ERROR's
-            # comment. Without this check, this case would fall through to a
-            # "success" whose title/raw are just the page shell's own generic
-            # copy, not real product data.
-            raise ScraperError(
+            # Confirmed dead/invalid item_id or shop_id (error code
+            # 266900002 confirmed repeatedly against real dead URLs), not a
+            # scrape failure — same "site confirmed it doesn't exist"
+            # treatment as not_found_signature below, so this counts as a
+            # successful scrape with no data rather than dragging down the
+            # failure rate for a URL that was never going to resolve.
+            raise ProductNotFoundError(
                 f"Shopee's own PDP data fetch failed for this item (error code {pdp_fetch_error.group(1)}) "
                 "— dead/invalid item_id or shop_id in the URL"
             )
