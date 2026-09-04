@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     http_pool_max_connections: int = 600
     http_pool_max_keepalive: int = 100
 
+    # Whether a successful scrape's normalized PDPData also gets persisted to
+    # the `pdp_data` table (in addition to the always-on `usage_logs` row).
+    # Set to false to scrape without storing product data at all — e.g. a
+    # client that only wants pass-through results, or while iterating on an
+    # adapter without piling up test rows.
+    store_pdp_data: bool = True
+
     log_dir: str = "logs"
     log_file: str = "app.log"
     log_max_bytes: int = 10_000_000

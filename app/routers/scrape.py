@@ -80,7 +80,8 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
             usage_log_id = await asyncio.to_thread(log_usage, key.api_key_id, site_id, url, status, elapsed_ms)
 
         if pdp is not None:
-            await asyncio.to_thread(_insert_pdp_data, site_id, usage_log_id, pdp)
+            if settings.store_pdp_data:
+                await asyncio.to_thread(_insert_pdp_data, site_id, usage_log_id, pdp)
             return BatchScrapeItem(url=url, status="success", data=pdp)
 
         return BatchScrapeItem(url=url, status=status, error=error_message)
