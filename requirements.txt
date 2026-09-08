@@ -4,7 +4,7 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 supabase==2.7.4
 httpx==0.27.2
-playwright==1.47.0
+playwright==1.49.1
 playwright-stealth==2.0.3
 # shopee_th's persistent-profile browser only (see browser_pool.py's
 # _shopee_th_context) — a patched Playwright fork that avoids the CDP
@@ -15,5 +15,5 @@ playwright-stealth==2.0.3
 # destination page, process boundary, proxy/IP, or fingerprint alignment —
 # this targets that specific detection vector. Replaces playwright-stealth
 # for shopee_th specifically; every other site keeps plain Playwright.
-patchright==1.62.3
+patchright==1.49.1
 jinja2==3.1.4
