@@ -379,14 +379,25 @@ class ShopeeScraper(BaseScraper):
         headless/headed, Bright Data's Scraping Browser) still ran into some
         form of that wall. Pay-per-successful-result on Apify's side; a
         failed/blocked URL isn't billed, per their pricing page.
+
+        Passing `country` explicitly (rather than relying on the actor's
+        own URL-based auto-detection) turned out to matter a lot in
+        practice: confirmed live that a shopee.vn URL with no `country` hung
+        past this call's own 320s timeout with zero response, while the
+        identical URL with `country: "VN"` resolved normally. unlocker_country
+        (e.g. "th", "vn") already matches the actor's expected two-letter
+        codes, so it costs nothing to always send it.
         """
         url = _normalize_shopee_url(url)
         actor = settings.apify_shopee_product_detail_actor_id.replace("/", "~")
+        payload: dict = {"productUrls": [url]}
+        if self.unlocker_country:
+            payload["country"] = self.unlocker_country.upper()
         try:
             resp = await get_client().post(
                 _APIFY_RUN_SYNC_URL.format(actor=actor),
                 params={"token": settings.apify_api_token},
-                json={"productUrls": [url]},
+                json=payload,
                 timeout=_APIFY_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
