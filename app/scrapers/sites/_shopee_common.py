@@ -209,11 +209,20 @@ class ShopeeScraper(BaseScraper):
         if is_captcha_html(html):
             raise CaptchaBlockedError("Shopee showed a verification/anti-bot wall")
 
-        # Check ld+json first — it's authoritative when present, so a real
-        # product page never falls through to the not-found check below.
+        # Check ld+json first — it's authoritative for price/rating (unlike
+        # bff_item below, whose price/stock/rating Shopee nulls out on this
+        # transport regardless of item validity), so a real product page
+        # never falls through to the not-found check below. bff_item, when
+        # also present in the same response, is Shopee's actual internal
+        # item object (same shape the browser transport captures live from
+        # pdp/get_pc) — far richer than ld+json's schema.org subset, so it's
+        # used as `raw` instead of ld+json's own thinner dict whenever
+        # available; price/rating/currency on the returned PDPData still
+        # come from ld+json either way.
         product = self._extract_ld_json_product(html)
         if product is not None:
-            return self._parse_ld_json_product(product, url)
+            bff_item = self._extract_pdp_bff_item(html, url)
+            return self._parse_ld_json_product(product, url, raw_override=bff_item)
 
         pdp_fetch_error = _PDP_FETCH_ERROR.search(html)
         if pdp_fetch_error:
@@ -474,7 +483,7 @@ class ShopeeScraper(BaseScraper):
                 return data
         return None
 
-    def _parse_ld_json_product(self, item: dict, url: str) -> PDPData:
+    def _parse_ld_json_product(self, item: dict, url: str, raw_override: dict | None = None) -> PDPData:
         offers = item.get("offers") or {}
         try:
             price = float(offers["price"])
@@ -505,7 +514,7 @@ class ShopeeScraper(BaseScraper):
             # transport's internal-API capture is the only source for this.
             sold_count=None,
             image_urls=images,
-            raw=item,
+            raw=raw_override if raw_override is not None else item,
         )
 
     def _parse_html_fallback(self, html: str, url: str) -> PDPData:

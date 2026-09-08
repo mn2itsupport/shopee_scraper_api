@@ -1,6 +1,8 @@
 """Shopee Vietnam PDP adapter. Shared logic lives in _shopee_common.py — this
 file only pins the country-specific constants."""
 
+from app.config import settings
+from app.models.schemas import PDPData
 from app.scrapers.sites._shopee_common import ShopeeScraper
 
 
@@ -19,3 +21,13 @@ class ShopeeVNScraper(ShopeeScraper):
     # captured by this scraper itself — verify against a real dead product
     # page and tighten/correct if it ever produces a false positive.
     not_found_signature = "sản phẩm không tồn tại"
+
+    # See ShopeeTHScraper.browser_mode_override — same escape hatch, empty
+    # by default so shopee_vn stays on the global BROWSER_MODE until
+    # SHOPEE_VN_BROWSER_MODE_OVERRIDE is explicitly set to "apify".
+    @property
+    def browser_mode_override(self) -> str:
+        return settings.shopee_vn_browser_mode_override
+
+    async def fetch_pdp_via_apify(self, url: str) -> PDPData:
+        return await self._apify_fetch(url)

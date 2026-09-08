@@ -64,6 +64,29 @@ class Settings(BaseSettings):
     # entirely by running server-side on Apify's own infrastructure.
     shopee_th_browser_mode_override: str = "local"
 
+    # shopee_vn's own override, same mechanism as shopee_th above — empty by
+    # default (falls back to the global BROWSER_MODE, i.e. whatever
+    # shopee_br also uses). Shopee VN hit the same anti-bot wall as TH on
+    # the plain Bright Data Unlocker transport (confirmed live: requests
+    # hung well past Bright Data's own ~90s-160s internal deadline with no
+    # response at all rather than a clean captcha_blocked result), so
+    # "apify" is the fix here too — set once you've confirmed the actor's
+    # coverage extends to shopee.vn (only shopee.co.th was confirmed when
+    # this was first wired up for shopee_th).
+    shopee_vn_browser_mode_override: str = ""
+
+    # shopee_br's own override, same mechanism as shopee_th/shopee_vn above
+    # — empty by default (stays on the fast global BROWSER_MODE, i.e. Bright
+    # Data's Web Unlocker). Set to "local" to instead open a real browser
+    # page and capture the live pdp/get_pc XHR Shopee's own frontend makes
+    # (see ShopeeScraper.fetch_pdp) — the Unlocker transport never does this
+    # (it's a single server-side HTML render, no live page/XHR), so its
+    # `raw` field is schema.org ld+json (thin) rather than Shopee's actual
+    # internal item object (rich: price tiers, stock, tier_variations, shop
+    # internals, ...). Pair with PROXY_MODE=brightdata_residential so the
+    # browser's exit IP isn't Railway's raw datacenter IP.
+    shopee_br_browser_mode_override: str = ""
+
     # "static_list": round-robin PROXY_LIST. "rotating_session": one sticky
     # gateway (PROXY_GATEWAY_SERVER) with a fresh random session id appended
     # to the username on every request — the pattern residential-proxy
