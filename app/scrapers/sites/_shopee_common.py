@@ -30,6 +30,24 @@ from app.scrapers.http_pool import get_client
 _PDP_API_FRAGMENTS = ["pdp/get_pc", "/item/get"]
 _URL_ID_PATTERN = re.compile(r"-i\.(\d+)\.(\d+)")
 _UNLOCKER_API_URL = "https://api.brightdata.com/request"
+_DATASET_TRIGGER_URL = "https://api.brightdata.com/datasets/v3/trigger"
+_DATASET_PROGRESS_URL = "https://api.brightdata.com/datasets/v3/progress/{snapshot_id}"
+_DATASET_SNAPSHOT_URL = "https://api.brightdata.com/datasets/v3/snapshot/{snapshot_id}"
+# Seconds between progress polls while waiting for a dataset job to finish —
+# these run on Bright Data's own infrastructure independent of our request,
+# so there's nothing to gain from polling faster than this.
+_DATASET_POLL_INTERVAL_SECONDS = 3
+# {actor} is "owner~actor-name" (Apify's API uses "~" where the actor's own
+# page URL uses "/") — run-sync-get-dataset-items runs the actor and hands
+# back its output directly in the response body, no separate poll/snapshot
+# step needed (unlike Bright Data's Dataset API above).
+_APIFY_RUN_SYNC_URL = "https://api.apify.com/v2/actors/{actor}/run-sync-get-dataset-items"
+# Apify's own run-sync endpoint returns its own 408 after 300s server-side —
+# our client timeout needs enough margin above that to actually see the real
+# response rather than giving up first (confirmed via live testing:
+# settings.scrape_timeout_seconds' default 150s is too short for this actor,
+# which can legitimately take longer than a direct browser/API scrape does).
+_APIFY_TIMEOUT_SECONDS = 320
 _LD_JSON_BLOCK = re.compile(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
 # The unlocker/raw transport's PDP page embeds its own client-side fetch
 # state (Shopee's "PDP BFF" call) in a <script type="text/mfe-initial-data">
@@ -219,6 +237,200 @@ class ShopeeScraper(BaseScraper):
 
         return self._parse_html_fallback(html, url)
 
+    async def _dataset_api_fetch(self, url: str) -> PDPData:
+        """Shared implementation for BaseScraper.fetch_pdp_via_dataset_api —
+        not exposed directly on ShopeeScraper (BR/VN still raise
+        NotImplementedError via the base class default); a country adapter
+        opts in by overriding fetch_pdp_via_dataset_api to call this.
+
+        Runs Bright Data's maintained Shopee scraper (a Dataset API "scraper"
+        product, separate from Web Unlocker/Scraping Browser) via its async
+        trigger -> poll -> snapshot flow: Bright Data's own infrastructure
+        handles anti-bot/CAPTCHA entirely server-side and hands back
+        already-structured JSON (price included) instead of raw HTML, so this
+        transport isn't subject to the risk-control rejection the browser and
+        Web Unlocker transports hit on Shopee TH's live pdp/get_pc API.
+        """
+        url = _normalize_shopee_url(url)
+        client = get_client()
+        headers = {"Authorization": f"Bearer {settings.brightdata_api_token}", "Content-Type": "application/json"}
+
+        try:
+            trigger_resp = await client.post(
+                _DATASET_TRIGGER_URL,
+                params={"dataset_id": settings.brightdata_shopee_dataset_id},
+                headers=headers,
+                json={"input": [{"url": url}]},
+            )
+            trigger_resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            detail = str(exc) or type(exc).__name__
+            raise ScraperError(f"Bright Data dataset API trigger failed: {detail}") from exc
+
+        snapshot_id = trigger_resp.json().get("snapshot_id")
+        if not snapshot_id:
+            raise ScraperError("Bright Data dataset API trigger response had no snapshot_id")
+
+        status = None
+        deadline = asyncio.get_event_loop().time() + settings.scrape_timeout_seconds
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                progress_resp = await client.get(_DATASET_PROGRESS_URL.format(snapshot_id=snapshot_id), headers=headers)
+                progress_resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                detail = str(exc) or type(exc).__name__
+                raise ScraperError(f"Bright Data dataset API progress check failed: {detail}") from exc
+
+            status = progress_resp.json().get("status")
+            if status == "ready":
+                break
+            if status == "failed":
+                raise ScraperError(f"Bright Data dataset API job failed for snapshot {snapshot_id}")
+            await asyncio.sleep(_DATASET_POLL_INTERVAL_SECONDS)
+        else:
+            raise ScraperError(
+                f"Bright Data dataset API job did not complete within {settings.scrape_timeout_seconds}s "
+                f"(last status: {status})"
+            )
+
+        try:
+            snapshot_resp = await client.get(
+                _DATASET_SNAPSHOT_URL.format(snapshot_id=snapshot_id), headers=headers, params={"format": "json"}
+            )
+            snapshot_resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            detail = str(exc) or type(exc).__name__
+            raise ScraperError(f"Bright Data dataset API snapshot fetch failed: {detail}") from exc
+
+        records = snapshot_resp.json()
+        if not records:
+            raise ProductNotFoundError("Bright Data dataset API returned no records for this item")
+        return self._parse_dataset_record(records[0], url)
+
+    def _parse_dataset_record(self, record: dict, url: str) -> PDPData:
+        # Field names confirmed against Bright Data's own published Shopee
+        # dataset sample (luminati-io/Shopee-dataset-samples): final_price is
+        # the actual current/discounted price, initial_price the pre-discount
+        # one; image comes back as a JSON-array-encoded string, not a list.
+        price_raw = record.get("final_price") or record.get("initial_price")
+        try:
+            price = float(price_raw) if price_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            price = None
+
+        rating_raw = record.get("rating")
+        try:
+            rating = float(rating_raw) if rating_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            rating = None
+
+        sold_raw = record.get("sold")
+        try:
+            sold = int(sold_raw) if sold_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            sold = None
+
+        images = record.get("image")
+        if isinstance(images, str):
+            try:
+                images = json.loads(images)
+            except json.JSONDecodeError:
+                images = [images]
+        if not isinstance(images, list):
+            images = []
+
+        match = _URL_ID_PATTERN.search(url)
+        external_id = f"{match.group(1)}.{match.group(2)}" if match else (record.get("id") and str(record["id"]))
+
+        return PDPData(
+            site_key=self.site_key,
+            product_url=url,
+            external_product_id=external_id,
+            title=record.get("title"),
+            price=price,
+            currency=record.get("currency") or self.default_currency,
+            rating=rating,
+            sold_count=sold,
+            image_urls=[i for i in images if isinstance(i, str)],
+            raw=record,
+        )
+
+    async def _apify_fetch(self, url: str) -> PDPData:
+        """Shared implementation for BaseScraper.fetch_pdp_via_apify — not
+        exposed directly on ShopeeScraper; a country adapter opts in by
+        overriding fetch_pdp_via_apify to call this.
+
+        Runs a third-party Apify actor (default: gio21/shopee-product-detail,
+        confirmed to accept a direct product URL and cover shopee.co.th) via
+        its synchronous run-sync-get-dataset-items endpoint — one HTTP call,
+        no polling. The actor's own infrastructure handles Shopee's anti-bot
+        layer entirely server-side, so this transport isn't subject to the
+        risk-control rejection the browser transport hits — added as an
+        alternative after every automated browser-driven approach (local
+        headless/headed, Bright Data's Scraping Browser) still ran into some
+        form of that wall. Pay-per-successful-result on Apify's side; a
+        failed/blocked URL isn't billed, per their pricing page.
+        """
+        url = _normalize_shopee_url(url)
+        actor = settings.apify_shopee_product_detail_actor_id.replace("/", "~")
+        try:
+            resp = await get_client().post(
+                _APIFY_RUN_SYNC_URL.format(actor=actor),
+                params={"token": settings.apify_api_token},
+                json={"productUrls": [url]},
+                timeout=_APIFY_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            detail = str(exc) or type(exc).__name__
+            raise ScraperError(f"Apify actor request failed: {detail}") from exc
+
+        records = resp.json()
+        if not records:
+            raise ProductNotFoundError("Apify actor returned no records for this item")
+        return self._parse_apify_record(records[0], url)
+
+    def _parse_apify_record(self, record: dict, url: str) -> PDPData:
+        # Field names per gio21/shopee-product-detail's documented output —
+        # re-inspect and adjust here if a different Apify actor is
+        # configured (APIFY_SHOPEE_PRODUCT_DETAIL_ACTOR_ID) or its schema
+        # changes.
+        price_raw = record.get("price")
+        try:
+            price = float(price_raw) if price_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            price = None
+
+        rating_raw = record.get("rating")
+        try:
+            rating = float(rating_raw) if rating_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            rating = None
+
+        # historicalSold is almost always null (Shopee redacts it) —
+        # historicalSoldEstimated is a bucketed string like "10k+"/"5k+", not
+        # a real count, so there's no clean numeric sold_count from this
+        # actor; leave it unset rather than parse a misleading approximation.
+        images = record.get("images")
+        if not isinstance(images, list):
+            images = []
+
+        match = _URL_ID_PATTERN.search(url)
+        external_id = f"{match.group(1)}.{match.group(2)}" if match else (record.get("itemId") and str(record["itemId"]))
+
+        return PDPData(
+            site_key=self.site_key,
+            product_url=url,
+            external_product_id=external_id,
+            title=record.get("name"),
+            price=price,
+            currency=record.get("currency") or self.default_currency,
+            rating=rating,
+            sold_count=None,
+            image_urls=[i for i in images if isinstance(i, str)],
+            raw=record,
+        )
+
     def _extract_pdp_bff_item(self, html: str, url: str) -> dict | None:
         match = _URL_ID_PATTERN.search(url)
         cache_key = f"{match.group(1)}.{match.group(2)}" if match else None
@@ -323,6 +535,20 @@ class ShopeeScraper(BaseScraper):
     def _parse_api_body(self, body: dict, url: str) -> PDPData:
         item = body.get("data", {}).get("item") or body.get("data", {})
         if not item:
+            if "error" in body:
+                # Shopee's risk-control layer can reject the live pdp/get_pc
+                # call with HTTP 200 and a minified error body instead of a
+                # captcha page — confirmed via live testing against shopee_th
+                # (body shaped like {"error": 90309999, ...}, no "data" key at
+                # all) even with an authenticated session. Same anti-bot-wall
+                # shape CaptchaBlockedError exists for; route it through that
+                # retry path (fresh context, rotated proxy, backoff) instead
+                # of failing immediately and non-retryably as a plain
+                # ScraperError would.
+                raise CaptchaBlockedError(
+                    f"Shopee's PDP API rejected this request (error code {body.get('error')}) — "
+                    "likely risk-control rather than a real data gap"
+                )
             raise ScraperError("Shopee PDP API response had no item data")
 
         price_raw = item.get("price") or item.get("price_min")

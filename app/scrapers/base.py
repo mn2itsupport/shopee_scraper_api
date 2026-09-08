@@ -43,8 +43,18 @@ class BaseScraper(ABC):
     # site's anti-bot layer and the Unlocker never renders a real page even
     # after 90s+, while forcing the matching country resolves in ~15s. Leave
     # "" to let Bright Data auto-select (fine for targets that don't need it,
-    # e.g. shopee.com.br).
+    # e.g. shopee.com.br). Also used as the "-country-<cc>" suffix for
+    # PROXY_MODE=brightdata_residential (see proxy_provider.py) when this
+    # site's browser_mode_override routes it through the browser transport.
     unlocker_country: str = ""
+
+    # Per-site override of settings.browser_mode (app/config.py) — None
+    # means "use the global setting" like every other site. Set this when a
+    # site needs a different transport than the rest (e.g. shopee_th forcing
+    # "local" so it goes through acquire_context()/fetch_pdp() and picks up
+    # its cached login session + country-targeted proxy, even while the
+    # global default stays brightdata_unlocker_api for other sites).
+    browser_mode_override: str | None = None
 
     @abstractmethod
     async def fetch_pdp(self, context: BrowserContext, url: str) -> PDPData:
@@ -63,3 +73,23 @@ class BaseScraper(ABC):
         that don't override this simply can't run in that mode.
         """
         raise NotImplementedError(f"{self.site_key} does not support the Web Unlocker REST API transport")
+
+    async def fetch_pdp_via_dataset_api(self, url: str) -> PDPData:
+        """Fetch `url` via one of Bright Data's maintained per-site Dataset
+        API scrapers (no browser/Playwright involved) and return normalized
+        PDP data. Only called when BROWSER_MODE=brightdata_dataset_api;
+        optional to implement — sites that don't override this simply can't
+        run in that mode.
+        """
+        raise NotImplementedError(f"{self.site_key} does not support the Bright Data Dataset API transport")
+
+    async def fetch_pdp_via_apify(self, url: str) -> PDPData:
+        """Fetch `url` via a third-party Apify actor (no browser/Playwright
+        involved — a single synchronous HTTP call, the actor's own
+        infrastructure handles anti-bot server-side) and return normalized
+        PDP data. Only called when BROWSER_MODE (or a site's own
+        browser_mode_override, e.g. ShopeeTHScraper's) is "apify"; optional
+        to implement — sites that don't override this simply can't run in
+        that mode.
+        """
+        raise NotImplementedError(f"{self.site_key} does not support the Apify transport")

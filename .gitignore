@@ -9,6 +9,10 @@ __pycache__/
 *.log
 logs/
 
+# Persistent Chromium profile for shopee_th (cookies/localStorage from a
+# real human login) — see scripts/shopee_th_manual_login.py.
+browser_profiles/
+
 .vscode/
 
 *.postman_collection.json

@@ -38,13 +38,22 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
             jitter_ms = random.uniform(settings.pre_scrape_jitter_ms_min, settings.pre_scrape_jitter_ms_max)
             await asyncio.sleep(jitter_ms / 1000)
 
+        browser_mode = scraper.browser_mode_override or settings.browser_mode
         try:
-            if settings.browser_mode == "brightdata_unlocker_api":
+            if browser_mode == "brightdata_unlocker_api":
                 # No browser context needed — this transport is a single
                 # server-side-rendered HTTP call.
                 return await scraper.fetch_pdp_via_unlocker_api(url)
+            if browser_mode == "brightdata_dataset_api":
+                # No browser context needed — Bright Data's own maintained
+                # scraper runs server-side; we just trigger/poll/fetch it.
+                return await scraper.fetch_pdp_via_dataset_api(url)
+            if browser_mode == "apify":
+                # No browser context needed — a third-party Apify actor runs
+                # server-side and hands back structured JSON in one call.
+                return await scraper.fetch_pdp_via_apify(url)
             async with acquire_context(
-                scraper.locale, scraper.timezone_id, scraper.geolocation, scraper.unlocker_country
+                scraper.site_key, scraper.locale, scraper.timezone_id, scraper.geolocation, scraper.unlocker_country
             ) as context:
                 return await scraper.fetch_pdp(context, url)
         except CaptchaBlockedError as exc:

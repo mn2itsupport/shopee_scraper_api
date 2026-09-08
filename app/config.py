@@ -25,9 +25,44 @@ class Settings(BaseSettings):
     # Bright Data's Web Unlocker REST API, which renders the page server-side
     # and hands back plain HTML. Only meaningful for site adapters that
     # implement BaseScraper.fetch_pdp_via_unlocker_api (see shopee_br.py).
+    # "brightdata_dataset_api": no browser/Playwright involved either — each
+    # scrape triggers a job on one of Bright Data's maintained per-site
+    # scrapers (their own infrastructure handles anti-bot/CAPTCHA entirely
+    # server-side) via the async trigger/poll/snapshot Dataset API, and
+    # returns already-structured JSON (price included) instead of raw HTML.
+    # Needs BRIGHTDATA_SHOPEE_DATASET_ID below in addition to
+    # BRIGHTDATA_API_TOKEN. Only meaningful for site adapters that implement
+    # BaseScraper.fetch_pdp_via_dataset_api (see _shopee_common.py).
     browser_mode: str = "local"
     brightdata_ws_endpoint: str = ""
     brightdata_api_token: str = ""
+    brightdata_shopee_dataset_id: str = ""
+
+    # "apify": no browser/Playwright involved — each scrape is a single
+    # synchronous POST to an Apify actor that scrapes the product server-side
+    # (its own infrastructure handles anti-bot entirely) and returns
+    # already-structured JSON directly, no separate poll/snapshot step needed
+    # (unlike BROWSER_MODE=brightdata_dataset_api). Only meaningful for site
+    # adapters that implement BaseScraper.fetch_pdp_via_apify (see
+    # _shopee_common.py). Needs an Apify account/API token — apify.com.
+    apify_api_token: str = ""
+    # Actor slug in "owner/actor-name" form (converted to the API's
+    # "owner~actor-name" form at call time) — gio21/shopee-product-detail is
+    # a paid, per-successful-result actor confirmed to accept a direct
+    # product URL and cover shopee.co.th; swap this if you pick a different
+    # actor from Apify's marketplace.
+    apify_shopee_product_detail_actor_id: str = "gio21/shopee-product-detail"
+
+    # shopee_th's own browser_mode_override (see ShopeeTHScraper) — kept
+    # separate from the global BROWSER_MODE above so this one site can route
+    # differently (its persistent-profile local browser, or the Apify actor
+    # above, or Bright Data's Dataset API) without affecting shopee_br/vn.
+    # "local" is the persistent-profile + Patchright path this project has
+    # relied on so far; every automated/headless variant of it still hits
+    # Shopee TH's anti-bot layer (see shopee_login.py's comments) — "apify"
+    # is worth trying once you have a token, since it avoids that fight
+    # entirely by running server-side on Apify's own infrastructure.
+    shopee_th_browser_mode_override: str = "local"
 
     # "static_list": round-robin PROXY_LIST. "rotating_session": one sticky
     # gateway (PROXY_GATEWAY_SERVER) with a fresh random session id appended
@@ -61,10 +96,45 @@ class Settings(BaseSettings):
     # Optional: log into a real Shopee account once at startup and reuse that
     # session (cookies/localStorage) across scrape contexts instead of
     # scraping anonymously. Login failure is non-fatal — falls back to
-    # anonymous scraping with a warning logged.
+    # anonymous scraping with a warning logged. This pair is shopee_br-specific;
+    # see shopee_th_login_* below for shopee_th's own account.
     shopee_login_enabled: bool = False
     shopee_login_username: str = ""
     shopee_login_password: str = ""
+
+    # Same as above but for shopee_th. Kept separate from shopee_login_* (not
+    # a list/dict) because each site logs in with its own dedicated account —
+    # ShopeeTHScraper.browser_mode_override forces shopee_th onto the
+    # browser/local transport specifically so this cached session (plus
+    # PROXY_MODE=brightdata_residential country targeting) is actually used
+    # instead of bypassed like the brightdata_unlocker_api transport would.
+    shopee_th_login_enabled: bool = False
+    shopee_th_login_username: str = ""
+    shopee_th_login_password: str = ""
+
+    # shopee_th specifically (not br/vn): reuse one persistent Chromium
+    # profile (browser_profiles/shopee_th/, on disk) across every scrape and
+    # app restart, instead of a fresh throwaway context per request. Seed it
+    # once with `python scripts/shopee_th_manual_login.py` — a real, visible
+    # browser window you log into by hand — since every *automated* shopee_th
+    # login attempt tried so far (local Chromium, Bright Data's Scraping
+    # Browser) got blocked by Shopee's own traffic-verification wall before
+    # completing. See browser_pool.py's _shopee_th_context.
+    shopee_th_use_persistent_profile: bool = True
+
+    # How often (minutes) to re-check whether the shopee_th persistent
+    # profile's session is still actually authenticated, on top of the
+    # once-at-startup check — a session can go stale hours into a long-running
+    # process, and without this the first sign would be scrapes themselves
+    # failing. See browser_pool.py's session watchdog / shopee_login.py's
+    # check_shopee_th_session_valid.
+    shopee_th_session_check_interval_minutes: int = 30
+    # Optional: POST a small JSON payload ({"text": "..."}, Slack incoming
+    # webhook-compatible) to this URL only when the session's valid/invalid
+    # state actually changes (not on every check) — so you find out the
+    # moment it needs scripts/shopee_th_manual_login.py rerun instead of only
+    # seeing it in the logs. Leave empty to rely on the log warning alone.
+    shopee_th_session_alert_webhook_url: str = ""
 
     default_requests_per_minute: int = 30
 
