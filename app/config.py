@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     # actor from Apify's marketplace.
     apify_shopee_product_detail_actor_id: str = "gio21/shopee-product-detail"
 
+    # shopee_vn only (see ShopeeScraper._apify_fetch_xtracto) — a second,
+    # differently-shaped Apify actor used instead of the one above for this
+    # one site. gio21/shopee-product-detail consistently falls back to a
+    # weaker data source for shopee.vn specifically (real title/images but
+    # price/rating nulled - confirmed live, reproducible); this actor
+    # returned a real price/rating/shop object for the same country on a
+    # valid listing. shopee_th/br are unaffected.
+    apify_xtracto_shopee_actor_id: str = "xtracto/shopee-scraper"
+
     # shopee_th's own browser_mode_override (see ShopeeTHScraper) — kept
     # separate from the global BROWSER_MODE above so this one site can route
     # differently (its persistent-profile local browser, or the Apify actor

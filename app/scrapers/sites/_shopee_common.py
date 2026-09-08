@@ -451,6 +451,90 @@ class ShopeeScraper(BaseScraper):
             raw=record,
         )
 
+    async def _apify_fetch_xtracto(self, url: str) -> PDPData:
+        """Alternate Apify actor (xtracto/shopee-scraper), used for
+        shopee_vn instead of _apify_fetch's gio21/shopee-product-detail —
+        confirmed live that gio21 consistently falls back to its weaker
+        "embedded_html" source for shopee.vn (real data but price/rating
+        nulled), while this actor returned a real price/rating/shop object
+        for the same country on a valid listing. Different input/output
+        shape entirely (mode/url/fetchDetail vs productUrls array; shop_id
+        +item_id/price_min/rating_star vs itemId/price/rating), so this is
+        a parallel implementation rather than a shared one. A dead/invalid
+        listing comes back as an all-null record (confirmed live: empty
+        title, every field null) rather than an empty dataset or an error —
+        detect that and raise ProductNotFoundError instead of returning a
+        near-empty "success".
+        """
+        url = _normalize_shopee_url(url)
+        actor = settings.apify_xtracto_shopee_actor_id.replace("/", "~")
+        payload: dict = {"mode": "url", "url": url, "fetchDetail": True, "maxProducts": 1}
+        if self.unlocker_country:
+            payload["country"] = self.unlocker_country.lower()
+        try:
+            resp = await get_client().post(
+                _APIFY_RUN_SYNC_URL.format(actor=actor),
+                params={"token": settings.apify_api_token},
+                json=payload,
+                timeout=_APIFY_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            detail = str(exc) or type(exc).__name__
+            raise ScraperError(f"Apify actor request failed: {detail}") from exc
+
+        records = resp.json()
+        if not records:
+            raise ProductNotFoundError("Apify actor returned no records for this item")
+        return self._parse_apify_xtracto_record(records[0], url)
+
+    def _parse_apify_xtracto_record(self, record: dict, url: str) -> PDPData:
+        if not record.get("title") and record.get("price") is None and not record.get("images"):
+            raise ProductNotFoundError("Apify actor returned an all-null record — likely a dead/invalid item")
+
+        price_raw = record.get("price") if record.get("price") not in (None, "") else record.get("price_min")
+        try:
+            price = float(price_raw) if price_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            price = None
+
+        rating_raw = record.get("rating_star")
+        try:
+            rating = float(rating_raw) if rating_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            rating = None
+
+        sold_raw = record.get("historical_sold") or record.get("sold")
+        try:
+            sold = int(sold_raw) if sold_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            sold = None
+
+        images = record.get("images")
+        if not isinstance(images, list):
+            images = []
+
+        match = _URL_ID_PATTERN.search(url)
+        if match:
+            external_id = f"{match.group(1)}.{match.group(2)}"
+        elif record.get("shop_id") is not None and record.get("item_id") is not None:
+            external_id = f"{record['shop_id']}.{record['item_id']}"
+        else:
+            external_id = None
+
+        return PDPData(
+            site_key=self.site_key,
+            product_url=url,
+            external_product_id=external_id,
+            title=record.get("title") or None,
+            price=price,
+            currency=record.get("currency") or self.default_currency,
+            rating=rating,
+            sold_count=sold,
+            image_urls=[i for i in images if isinstance(i, str)],
+            raw=record,
+        )
+
     def _extract_pdp_bff_item(self, html: str, url: str) -> dict | None:
         match = _URL_ID_PATTERN.search(url)
         cache_key = f"{match.group(1)}.{match.group(2)}" if match else None

@@ -30,4 +30,6 @@ class ShopeeVNScraper(ShopeeScraper):
         return settings.shopee_vn_browser_mode_override
 
     async def fetch_pdp_via_apify(self, url: str) -> PDPData:
-        return await self._apify_fetch(url)
+        # xtracto/shopee-scraper, not the gio21 actor shopee_th uses — see
+        # ShopeeScraper._apify_fetch_xtracto for why.
+        return await self._apify_fetch_xtracto(url)
