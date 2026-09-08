@@ -1,8 +1,10 @@
 # Playwright's official image ships the exact Chromium build + OS-level
-# dependencies (fonts, codecs, etc.) that playwright==1.47.0 expects — avoids
+# dependencies (fonts, codecs, etc.) that playwright==1.49.1 expects — avoids
 # hand-rolling apt-get for headless Chromium, which is the painful part of
-# containerizing this app.
-FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+# containerizing this app. Keep this tag in lockstep with requirements.txt's
+# playwright version — a mismatch fails browser_pool.py's chromium.launch()
+# at startup with "Executable doesn't exist".
+FROM mcr.microsoft.com/playwright/python:v1.49.1-jammy
 
 WORKDIR /app
 
