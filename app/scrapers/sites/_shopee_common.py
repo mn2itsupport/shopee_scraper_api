@@ -60,16 +60,18 @@ _LD_JSON_BLOCK = re.compile(r'<script[^>]+application/ld\+json[^>]*>(.*?)</scrip
 # URL regardless of whether the fetch behind them succeeded.
 _PDP_FETCH_ERROR = re.compile(r'"setPdpBffData":\{[^}]*"isError":true,"error":\{[^}]*"error":(\d+)')
 # Same <script type="text/mfe-initial-data"> block also carries the actual
-# item data Shopee's frontend fetched, at
-# initialState.DOMAIN_PDP.data.PDP_BFF_DATA.cachedMap["<shop_id>/<item_id>"].item
-# — the same item shape _parse_api_body() gets from the live pdp/get_pc XHR
-# (browser transport), just server-embedded instead of a live network
-# response. Confirmed present on both shopee_th and shopee_vn pages that
-# have no ld+json Product block, so this is a strictly better source than
-# the <title>/og:description-only fallback: it has the real title and image
-# ids even when price/rating/sold are nulled out (confirmed on both
-# countries — Shopee withholds those specific fields from this transport
-# regardless of item validity, not something fixable client-side).
+# PDP BFF data Shopee's frontend fetched, at
+# initialState.DOMAIN_PDP.data.PDP_BFF_DATA.cachedMap["<shop_id>/<item_id>"]
+# — the same {item, account, product_images, product_price, shop_detailed,
+# installment_drawer, product_description, ...} shape _parse_api_body() gets
+# from body["data"] on the live pdp/get_pc XHR (browser transport), just
+# server-embedded instead of a live network response. Confirmed present on
+# both shopee_th and shopee_vn pages that have no ld+json Product block, so
+# this is a strictly better source than the <title>/og:description-only
+# fallback: it has the real title and image ids even when item.price/
+# item.item_rating/item.sold are nulled out (confirmed on both countries —
+# Shopee withholds those specific fields from this transport regardless of
+# item validity, not something fixable client-side).
 _MFE_INITIAL_DATA_BLOCK = re.compile(
     r'<script[^>]+type="text/mfe-initial-data"[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL
 )
@@ -210,19 +212,23 @@ class ShopeeScraper(BaseScraper):
             raise CaptchaBlockedError("Shopee showed a verification/anti-bot wall")
 
         # Check ld+json first — it's authoritative for price/rating (unlike
-        # bff_item below, whose price/stock/rating Shopee nulls out on this
-        # transport regardless of item validity), so a real product page
-        # never falls through to the not-found check below. bff_item, when
-        # also present in the same response, is Shopee's actual internal
-        # item object (same shape the browser transport captures live from
-        # pdp/get_pc) — far richer than ld+json's schema.org subset, so it's
-        # used as `raw` instead of ld+json's own thinner dict whenever
-        # available; price/rating/currency on the returned PDPData still
-        # come from ld+json either way.
+        # bff_data's item below, whose price/stock/rating Shopee nulls out on
+        # this transport regardless of item validity), so a real product page
+        # never falls through to the not-found check below. bff_data, when
+        # also present in the same response, is Shopee's actual internal PDP
+        # BFF payload (same {item, account, product_price, product_images,
+        # shop_detailed, installment_drawer, product_description, ...} shape
+        # the browser transport captures live from pdp/get_pc) — far richer
+        # than ld+json's schema.org subset, so it's used as `raw` instead of
+        # ld+json's own thinner dict whenever available; price/rating/
+        # currency on the returned PDPData still come from ld+json either
+        # way (_parse_ld_json_product backfills bff_data['item']'s own price/
+        # item_rating from them too, since those are the two fields this
+        # transport nulls out).
         product = self._extract_ld_json_product(html)
         if product is not None:
-            bff_item = self._extract_pdp_bff_item(html, url)
-            return self._parse_ld_json_product(product, url, raw_override=bff_item)
+            bff_data = self._extract_pdp_bff_data(html, url)
+            return self._parse_ld_json_product(product, url, raw_override=bff_data)
 
         pdp_fetch_error = _PDP_FETCH_ERROR.search(html)
         if pdp_fetch_error:
@@ -237,9 +243,9 @@ class ShopeeScraper(BaseScraper):
                 "— dead/invalid item_id or shop_id in the URL"
             )
 
-        bff_item = self._extract_pdp_bff_item(html, url)
-        if bff_item is not None:
-            return self._parse_api_body({"data": {"item": bff_item}}, url)
+        bff_data = self._extract_pdp_bff_data(html, url)
+        if bff_data is not None:
+            return self._parse_api_body({"data": bff_data}, url)
 
         if self.not_found_signature and self.not_found_signature in strip_script_and_style(html).lower():
             raise ProductNotFoundError("Shopee reports this product does not exist")
@@ -535,7 +541,13 @@ class ShopeeScraper(BaseScraper):
             raw=record,
         )
 
-    def _extract_pdp_bff_item(self, html: str, url: str) -> dict | None:
+    def _extract_pdp_bff_data(self, html: str, url: str) -> dict | None:
+        """Returns the full cached PDP BFF payload — {item, account,
+        product_images, product_price, product_review, shop_detailed,
+        installment_drawer, product_description, ...} — not just the `item`
+        sub-object, so callers get the same breadth of data a direct capture
+        of the live pdp/get_pc response would have.
+        """
         match = _URL_ID_PATTERN.search(url)
         cache_key = f"{match.group(1)}.{match.group(2)}" if match else None
 
@@ -559,9 +571,8 @@ class ShopeeScraper(BaseScraper):
             entry = cached_map.get(cache_key.replace(".", "/")) if cache_key else None
             if entry is None and len(cached_map) == 1:
                 entry = next(iter(cached_map.values()))
-            item = (entry or {}).get("item")
-            if item:
-                return item
+            if entry and entry.get("item"):
+                return entry
         return None
 
     def _extract_ld_json_product(self, html: str) -> dict | None:
@@ -599,19 +610,23 @@ class ShopeeScraper(BaseScraper):
 
         raw = raw_override if raw_override is not None else item
         if raw_override is not None:
-            # bff_item (raw_override) nulls out price/rating on this transport
-            # regardless of item validity (see the comment above this method's
-            # call site) — ld+json is authoritative for both and we've already
-            # computed them, so backfill rather than leave two of the most-used
-            # raw fields empty. Keep price in Shopee's native item.price scale
-            # (currency units * 100000, same divisor _parse_api_body uses) so
-            # raw stays internally consistent no matter which transport filled
-            # it in.
-            if raw.get("price") is None and price is not None:
-                raw["price"] = round(price * 100000)
-            existing_rating = raw.get("item_rating")
+            # bff_data (raw_override) is the full PDP BFF payload — {item,
+            # account, product_price, product_images, shop_detailed, ...} —
+            # but its item.price/item.item_rating are nulled out on this
+            # transport regardless of item validity (see the comment above
+            # this method's call site). ld+json is authoritative for both and
+            # we've already computed them, so backfill rather than leave two
+            # of the most-used fields empty on the one sub-object callers
+            # actually reach for. Keep price in Shopee's native item.price
+            # scale (currency units * 100000, same divisor _parse_api_body
+            # uses) so raw stays internally consistent no matter which
+            # transport filled it in.
+            inner_item = raw.get("item") if isinstance(raw.get("item"), dict) else raw
+            if inner_item.get("price") is None and price is not None:
+                inner_item["price"] = round(price * 100000)
+            existing_rating = inner_item.get("item_rating")
             if rating is not None and (not isinstance(existing_rating, dict) or existing_rating.get("rating_star") is None):
-                raw["item_rating"] = {**(existing_rating or {}), "rating_star": rating}
+                inner_item["item_rating"] = {**(existing_rating or {}), "rating_star": rating}
 
         return PDPData(
             site_key=self.site_key,
@@ -653,7 +668,8 @@ class ShopeeScraper(BaseScraper):
         raise CaptchaBlockedError("Shopee showed a verification/anti-bot wall")
 
     def _parse_api_body(self, body: dict, url: str) -> PDPData:
-        item = body.get("data", {}).get("item") or body.get("data", {})
+        data = body.get("data") or {}
+        item = data.get("item") or data
         if not item:
             if "error" in body:
                 # Shopee's risk-control layer can reject the live pdp/get_pc
@@ -693,7 +709,15 @@ class ShopeeScraper(BaseScraper):
             rating=(item.get("item_rating") or {}).get("rating_star"),
             sold_count=item.get("historical_sold") or item.get("sold"),
             image_urls=images,
-            raw=item,
+            # Preserve the full PDP BFF payload (item + account +
+            # product_price + product_images + shop_detailed +
+            # installment_drawer + product_description + ...) whenever body
+            # actually nests it that way — same shape Shopee's frontend gets
+            # from a direct pdp/get_pc call — rather than just the item
+            # subset; only falls back to item-only when data.item wasn't
+            # nested to begin with (e.g. a flatter body some other caller
+            # constructed).
+            raw=data if data.get("item") is not None else item,
         )
 
     async def _parse_dom_fallback(self, page, url: str) -> PDPData:

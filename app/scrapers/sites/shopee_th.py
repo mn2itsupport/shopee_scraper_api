@@ -28,7 +28,7 @@ class ShopeeTHScraper(ShopeeScraper):
     # Bright Data Web Unlocker REST, Bright Data's own Scraping Browser) got
     # risk-control rejected on the live pdp/get_pc call, which is the only
     # source of real price/rating/sold data — the Unlocker transport's HTML
-    # fallback (_extract_pdp_bff_item) gets those fields nulled out by Shopee
+    # fallback (_extract_pdp_bff_data) gets those fields nulled out by Shopee
     # regardless of item validity. And every *authenticated* browser-driven
     # attempt (local headless/headed, Patchright, Bright Data's Scraping
     # Browser with a real human login) still ran into some form of the same
