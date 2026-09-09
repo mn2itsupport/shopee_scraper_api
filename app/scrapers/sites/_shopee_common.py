@@ -133,6 +133,27 @@ class ShopeeScraper(BaseScraper):
             await page.route(f"**/*{fragment}*", handle_pdp_route)
 
         try:
+            if settings.shopee_warm_up_home_page:
+                try:
+                    await page.goto(
+                        f"https://{self.base_domain}",
+                        timeout=settings.scrape_timeout_seconds * 1000,
+                        wait_until="domcontentloaded",
+                    )
+                    await self._require_no_captcha(page)
+                    # Let the home page's own background scripts (fingerprint
+                    # SDKs, anti-bot cookie issuance) finish rather than
+                    # racing straight into the product navigation below.
+                    await asyncio.sleep(1.5)
+                except CaptchaBlockedError:
+                    raise
+                except Exception:
+                    # Best-effort — a warm-up navigation failure (timeout,
+                    # nav aborted, ...) shouldn't sink the real scrape below;
+                    # worst case it proceeds exactly as it did before this
+                    # existed.
+                    pass
+
             await page.goto(url, timeout=settings.scrape_timeout_seconds * 1000, wait_until="domcontentloaded")
 
             await self._require_no_captcha(page)

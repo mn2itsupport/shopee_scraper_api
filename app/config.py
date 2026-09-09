@@ -16,6 +16,15 @@ class Settings(BaseSettings):
     scrape_timeout_seconds: int = 30
     captcha_max_retries: int = 2
 
+    # ShopeeScraper.fetch_pdp() only (the browser-driven local/CDP transport):
+    # visit the site's home page first and let its anti-bot layer set the
+    # usual first-visit cookies (_gcl_au, SPC_EC, sp_m, ...) before navigating
+    # to the actual product page — a fresh context that goes straight to a
+    # product URL with none of those cookies looks nothing like a real
+    # visitor, who always lands via search/home first. Toggle off if it turns
+    # out to just add latency without actually changing Shopee's response.
+    shopee_warm_up_home_page: bool = True
+
     # "local": launch Chromium in-process (default). "brightdata_cdp": connect
     # to Bright Data's Scraping Browser over CDP instead of launching locally —
     # it handles proxy rotation, fingerprinting, and CAPTCHA solving on Bright
