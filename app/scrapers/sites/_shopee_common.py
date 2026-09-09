@@ -597,6 +597,22 @@ class ShopeeScraper(BaseScraper):
         match = _URL_ID_PATTERN.search(url)
         external_id = f"{match.group(1)}.{match.group(2)}" if match else None
 
+        raw = raw_override if raw_override is not None else item
+        if raw_override is not None:
+            # bff_item (raw_override) nulls out price/rating on this transport
+            # regardless of item validity (see the comment above this method's
+            # call site) — ld+json is authoritative for both and we've already
+            # computed them, so backfill rather than leave two of the most-used
+            # raw fields empty. Keep price in Shopee's native item.price scale
+            # (currency units * 100000, same divisor _parse_api_body uses) so
+            # raw stays internally consistent no matter which transport filled
+            # it in.
+            if raw.get("price") is None and price is not None:
+                raw["price"] = round(price * 100000)
+            existing_rating = raw.get("item_rating")
+            if rating is not None and (not isinstance(existing_rating, dict) or existing_rating.get("rating_star") is None):
+                raw["item_rating"] = {**(existing_rating or {}), "rating_star": rating}
+
         return PDPData(
             site_key=self.site_key,
             product_url=url,
@@ -609,7 +625,7 @@ class ShopeeScraper(BaseScraper):
             # transport's internal-API capture is the only source for this.
             sold_count=None,
             image_urls=images,
-            raw=raw_override if raw_override is not None else item,
+            raw=raw,
         )
 
     def _parse_html_fallback(self, html: str, url: str) -> PDPData:
