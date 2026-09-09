@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime, timezone
 
 from fastapi import Header, HTTPException
@@ -6,6 +7,20 @@ from fastapi import Header, HTTPException
 from app.core.security import hash_api_key
 from app.db.client import get_supabase
 from app.models.schemas import AuthedKey
+
+# Supabase/Postgres serializes timestamptz with trailing zeros stripped from
+# the fractional-seconds component (e.g. ".84128" instead of ".841280"), but
+# datetime.fromisoformat() on Python <3.11 only accepts exactly 3 or 6
+# fractional digits and raises ValueError on anything else — confirmed live
+# (Railway's Python 3.10 runtime) failing every authenticated request with
+# "Invalid isoformat string" once an expires_at happened to serialize with a
+# fractional-second count outside {3, 6}. Pad to 6 digits before parsing.
+_FRACTIONAL_SECONDS = re.compile(r"\.(\d{1,6})")
+
+
+def _parse_timestamptz(value: str) -> datetime:
+    padded = _FRACTIONAL_SECONDS.sub(lambda m: f".{m.group(1):0<6}", value, count=1)
+    return datetime.fromisoformat(padded)
 
 
 def _lookup_key(key_hash: str) -> dict | None:
@@ -32,7 +47,7 @@ async def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> Au
     if row is None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    expires_at = datetime.fromisoformat(row["expires_at"])
+    expires_at = _parse_timestamptz(row["expires_at"])
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
