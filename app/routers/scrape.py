@@ -82,7 +82,10 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
         if pdp is not None:
             if settings.store_pdp_data:
                 await asyncio.to_thread(_insert_pdp_data, site_id, usage_log_id, pdp)
-            return BatchScrapeItem(url=url, status="success", data=pdp)
+            # Public response is the site's raw payload verbatim (pdp.raw) —
+            # the normalized fields on `pdp` (title, price, ...) are only
+            # used above for DB storage/dashboard, not exposed to callers.
+            return BatchScrapeItem(url=url, status="success", data=pdp.raw)
 
         return BatchScrapeItem(url=url, status=status, error=error_message)
     except Exception as exc:

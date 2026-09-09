@@ -33,8 +33,14 @@ class PDPData(BaseModel):
 
 
 class ScrapeResponse(BaseModel):
+    """`data` is the site's own raw PDP payload (e.g. Shopee's get_pc `data`
+    object) verbatim — no normalized/derived fields layered on top. Those
+    derived fields (title, price, ...) still exist on PDPData internally for
+    DB storage/dashboard use; they're just not part of the public response.
+    """
+
     status: str
-    data: PDPData | None = None
+    data: dict | None = None
     error: str | None = None
 
 
