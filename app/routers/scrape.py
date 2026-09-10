@@ -93,7 +93,7 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
         return BatchScrapeItem(url=url, status="failed", error=f"Unexpected error: {exc}")
 
 
-@router.post("/{site_key}/pdp", response_model=ScrapeResponse)
+@router.post("/{site_key}/pdp", response_model=ScrapeResponse, response_model_exclude_none=True)
 async def scrape_pdp(
     site_key: str,
     body: ScrapeRequest,
@@ -117,7 +117,7 @@ async def scrape_pdp(
     raise HTTPException(status_code=status_code, detail=item.error or "Scrape failed")
 
 
-@router.post("/{site_key}/pdp/batch", response_model=BatchScrapeResponse)
+@router.post("/{site_key}/pdp/batch", response_model=BatchScrapeResponse, response_model_exclude_none=True)
 async def scrape_pdp_batch(
     site_key: str,
     body: BatchScrapeRequest,
