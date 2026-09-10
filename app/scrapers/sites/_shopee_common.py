@@ -667,7 +667,7 @@ class ShopeeScraper(BaseScraper):
             # which extraction path (ld+json-found vs not) produced it —
             # error/error_msg/bff_meta are always present (as null
             # placeholders) rather than silently absent on this branch only.
-            raw = {"error": None, "error_msg": None, "data": raw, "bff_meta": None}
+            raw = {"error": None, "error_msg": None, "bff_meta": None, "data": raw}
 
         return PDPData(
             site_key=self.site_key,
@@ -752,7 +752,7 @@ class ShopeeScraper(BaseScraper):
         raw = (
             body
             if is_full_envelope
-            else {"error": None, "error_msg": None, "data": data if data.get("item") is not None else item, "bff_meta": None}
+            else {"error": None, "error_msg": None, "bff_meta": None, "data": data if data.get("item") is not None else item}
         )
 
         return PDPData(
