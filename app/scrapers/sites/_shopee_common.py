@@ -612,9 +612,18 @@ class ShopeeScraper(BaseScraper):
 
     def _parse_ld_json_product(self, item: dict, url: str, raw_override: dict | None = None) -> PDPData:
         offers = item.get("offers") or {}
+        # A multi-variant item (different colors/sizes at different prices)
+        # gets "@type": "AggregateOffer" with lowPrice/highPrice instead of a
+        # single Offer's "price" — confirmed live (shopee_br) on a boots
+        # listing with variant prices from 47.20-54.90: offers["price"]
+        # raised KeyError, silently leaving price null even though a real
+        # price (the low end of the range) was right there. Fall back to
+        # lowPrice so a real value beats null; there's no single "the" price
+        # for a ranged item, so the low end is the closest honest answer.
+        price_raw = offers.get("price", offers.get("lowPrice"))
         try:
-            price = float(offers["price"])
-        except (KeyError, TypeError, ValueError):
+            price = float(price_raw)
+        except (TypeError, ValueError):
             price = None
 
         rating_raw = (item.get("aggregateRating") or {}).get("ratingValue")
