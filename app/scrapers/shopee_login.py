@@ -110,6 +110,12 @@ def enabled_configs() -> list[SiteLoginConfig]:
                 submit_selectors=['button:has-text("Entrar")'] + _SUBMIT_SELECTORS,
                 language_modal_selectors=_BR_LANGUAGE_MODAL_SELECTORS,
                 cookie_banner_selectors=_BR_COOKIE_BANNER_SELECTORS,
+                # Route login through the same BR residential proxy the
+                # scrape contexts use (PROXY_MODE=brightdata_residential) —
+                # logging in from one IP and then scraping with that
+                # session's cookies from a different exit IP/geo is itself a
+                # fraud-detection signal, so keep them consistent.
+                country="br",
             )
         )
     if settings.shopee_th_login_enabled:
@@ -270,25 +276,25 @@ def get_cached_storage_state(site_key: str) -> dict | None:
     return _cached_storage_state.get(site_key)
 
 
-_SHOPEE_TH_LOGIN_URL = "https://shopee.co.th/buyer/login"
-
-
-async def check_shopee_th_session_valid(context: BrowserContext, timeout_ms: int = 20000) -> bool | None:
-    """Best-effort check of whether shopee_th's persistent-profile session
-    (browser_pool.py's _shopee_th_context) is still actually authenticated,
-    rather than just trusting that cookies exist on disk — a session can go
-    stale (expired, revoked) while its cookies are still present, and a bare
-    cookie-count check can't tell the difference. Called once at startup.
+async def check_persistent_profile_session_valid(
+    context: BrowserContext, login_url: str, timeout_ms: int = 20000
+) -> bool | None:
+    """Best-effort check of whether a persistent-profile site's session
+    (browser_pool.py's _shopee_th_context / _shopee_br_context) is still
+    actually authenticated, rather than just trusting that cookies exist on
+    disk — a session can go stale (expired, revoked) while its cookies are
+    still present, and a bare cookie-count check can't tell the difference.
+    Called once at startup per site, then on that site's own watchdog tick.
 
     Returns True if logged in, False if the login form is still reachable
-    (session is dead — rerun scripts/shopee_th_manual_login.py to refresh
-    it), or None if the check itself got caught by Shopee's own
+    (session is dead — rerun the site's manual-login script to refresh it),
+    or None if the check itself got caught by Shopee's own
     traffic-verification wall (inconclusive — the session might still be
     fine, this check just couldn't confirm it either way).
     """
     page = await context.new_page()
     try:
-        await page.goto(_SHOPEE_TH_LOGIN_URL, timeout=timeout_ms)
+        await page.goto(login_url, timeout=timeout_ms)
         if "/verify/traffic/error" in page.url:
             return None
         try:

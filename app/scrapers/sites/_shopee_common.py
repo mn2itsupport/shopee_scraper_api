@@ -649,6 +649,17 @@ class ShopeeScraper(BaseScraper):
             if rating is not None and (not isinstance(existing_rating, dict) or existing_rating.get("rating_star") is None):
                 inner_item["item_rating"] = {**(existing_rating or {}), "rating_star": rating}
 
+            # bff_data is only ever the inner data payload — same as
+            # _extract_pdp_bff_data's own docstring says, it's never the full
+            # {error, error_msg, data, bff_meta} envelope a live pdp/get_pc
+            # capture returns, since this transport never touches that XHR.
+            # Wrap it the same way _parse_api_body's non-full-envelope branch
+            # does, so `raw`'s top-level shape is identical regardless of
+            # which extraction path (ld+json-found vs not) produced it —
+            # error/error_msg/bff_meta are always present (as null
+            # placeholders) rather than silently absent on this branch only.
+            raw = {"error": None, "error_msg": None, "data": raw, "bff_meta": None}
+
         return PDPData(
             site_key=self.site_key,
             product_url=url,
@@ -720,6 +731,21 @@ class ShopeeScraper(BaseScraper):
         match = _URL_ID_PATTERN.search(url)
         external_id = f"{match.group(1)}.{match.group(2)}" if match else None
 
+        # Preserve the whole get_pc envelope — error/error_msg/bff_meta
+        # alongside data — not just data, so callers get the exact same
+        # top-level shape Shopee's own frontend receives from a direct
+        # pdp/get_pc call, verbatim. A real live-captured envelope carries
+        # error/error_msg/bff_meta as siblings of data; only synthesize
+        # placeholders for those when body is fetch_pdp_via_unlocker_api's
+        # synthetic {"data": bff_data} wrapper, which never had them to
+        # begin with (that transport never touches the live pdp/get_pc XHR).
+        is_full_envelope = any(key in body for key in ("error", "error_msg", "bff_meta"))
+        raw = (
+            body
+            if is_full_envelope
+            else {"error": None, "error_msg": None, "data": data if data.get("item") is not None else item, "bff_meta": None}
+        )
+
         return PDPData(
             site_key=self.site_key,
             product_url=url,
@@ -730,15 +756,7 @@ class ShopeeScraper(BaseScraper):
             rating=(item.get("item_rating") or {}).get("rating_star"),
             sold_count=item.get("historical_sold") or item.get("sold"),
             image_urls=images,
-            # Preserve the full PDP BFF payload (item + account +
-            # product_price + product_images + shop_detailed +
-            # installment_drawer + product_description + ...) whenever body
-            # actually nests it that way — same shape Shopee's frontend gets
-            # from a direct pdp/get_pc call — rather than just the item
-            # subset; only falls back to item-only when data.item wasn't
-            # nested to begin with (e.g. a flatter body some other caller
-            # constructed).
-            raw=data if data.get("item") is not None else item,
+            raw=raw,
         )
 
     async def _parse_dom_fallback(self, page, url: str) -> PDPData:

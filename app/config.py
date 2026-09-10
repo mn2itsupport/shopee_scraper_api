@@ -177,6 +177,19 @@ class Settings(BaseSettings):
     # seeing it in the logs. Leave empty to rely on the log warning alone.
     shopee_th_session_alert_webhook_url: str = ""
 
+    # shopee_br's own persistent-profile setup, same mechanism as
+    # shopee_th_use_persistent_profile above (browser_profiles/shopee_br/,
+    # seeded via `python scripts/shopee_br_manual_login.py`) — tried after
+    # both anonymous and automated-login local/CDP transports got
+    # CaptchaBlockedError on every attempt against shopee_br (confirmed live
+    # 2026-09-10). Defaults to false (unlike shopee_th's true) since the
+    # profile hasn't been seeded by a human login yet — flip on only after
+    # running the manual-login script, same as shopee_th's own history. See
+    # browser_pool.py's _shopee_br_context.
+    shopee_br_use_persistent_profile: bool = False
+    shopee_br_session_check_interval_minutes: int = 30
+    shopee_br_session_alert_webhook_url: str = ""
+
     default_requests_per_minute: int = 30
 
     # Cap on how many URLs a single POST /v1/{site_key}/pdp/batch call may

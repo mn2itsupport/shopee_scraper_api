@@ -33,8 +33,9 @@ class PDPData(BaseModel):
 
 
 class ScrapeResponse(BaseModel):
-    """`data` is the site's own raw PDP payload (e.g. Shopee's get_pc `data`
-    object) verbatim — no normalized/derived fields layered on top. Those
+    """`data` is the site's own raw PDP payload verbatim — for Shopee, the
+    whole get_pc envelope (error/error_msg/bff_meta/data), not just its
+    `data` sub-object — no normalized/derived fields layered on top. Those
     derived fields (title, price, ...) still exist on PDPData internally for
     DB storage/dashboard use; they're just not part of the public response.
     """
