@@ -60,15 +60,18 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
         status = "failed"
         error_message: str | None = None
         pdp = None
+        not_found_data: dict | None = None
 
         try:
             pdp = await scrape_with_retries(site_key, url)
             status = "success"
-        except ProductNotFoundError:
+        except ProductNotFoundError as exc:
             # The site confirmed the product doesn't exist (dead/removed listing)
             # rather than the scrape itself failing — counts as a successful
-            # scrape with no data, not an error.
+            # scrape, surfacing the site's own not-found envelope (exc.raw) as
+            # `data` rather than an error.
             status = "success"
+            not_found_data = exc.raw
         except CaptchaBlockedError as exc:
             status = "captcha_blocked"
             error_message = str(exc)
@@ -87,7 +90,7 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
             # used above for DB storage/dashboard, not exposed to callers.
             return BatchScrapeItem(url=url, status="success", data=pdp.raw)
 
-        return BatchScrapeItem(url=url, status=status, error=error_message)
+        return BatchScrapeItem(url=url, status=status, error=error_message, data=not_found_data)
     except Exception as exc:
         logger.exception("Unexpected error scraping %s", url)
         return BatchScrapeItem(url=url, status="failed", error=f"Unexpected error: {exc}")

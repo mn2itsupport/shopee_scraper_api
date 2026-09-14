@@ -261,7 +261,8 @@ class ShopeeScraper(BaseScraper):
             # failure rate for a URL that was never going to resolve.
             raise ProductNotFoundError(
                 f"Shopee's own PDP data fetch failed for this item (error code {pdp_fetch_error.group(1)}) "
-                "— dead/invalid item_id or shop_id in the URL"
+                "— dead/invalid item_id or shop_id in the URL",
+                raw={"error": int(pdp_fetch_error.group(1)), "error_msg": None, "bff_meta": None, "data": None},
             )
 
         bff_data = self._extract_pdp_bff_data(html, url)
