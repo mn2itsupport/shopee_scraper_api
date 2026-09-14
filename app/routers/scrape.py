@@ -36,7 +36,7 @@ def _insert_pdp_data(site_id: str, usage_log_id: str | None, pdp) -> None:
     ).execute()
 
 
-async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> BatchScrapeItem:
+async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> tuple[BatchScrapeItem, bool]:
     """Runs the full auth-adjacent pipeline (rate limit, quota, scrape, usage
     logging) for one URL. Rate-limit/quota rejection is returned as a
     "rejected" item rather than raised, so a batch call can isolate one
@@ -48,19 +48,25 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
     ScraperError/CaptchaBlockedError/HTTPException) would propagate out of
     asyncio.gather and 500 the entire request, taking down every other URL
     in the same batch along with it.
+
+    The second element of the returned tuple flags a confirmed-not-found
+    result (site said the product doesn't exist) as opposed to a genuine
+    successful scrape — scrape_pdp uses it to return the site's own raw
+    envelope verbatim instead of wrapping it in {"status", "data"}.
     """
     try:
         try:
             check_burst_limit(key.api_key_id, key.requests_per_minute)
             await asyncio.to_thread(check_quota, key.api_key_id, key.daily_quota, key.monthly_quota)
         except HTTPException as exc:
-            return BatchScrapeItem(url=url, status="rejected", error=str(exc.detail))
+            return BatchScrapeItem(url=url, status="rejected", error=str(exc.detail)), False
 
         started = time.monotonic()
         status = "failed"
         error_message: str | None = None
         pdp = None
         not_found_data: dict | None = None
+        is_not_found = False
 
         try:
             pdp = await scrape_with_retries(site_key, url)
@@ -72,6 +78,7 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
             # `data` rather than an error.
             status = "success"
             not_found_data = exc.raw
+            is_not_found = True
         except CaptchaBlockedError as exc:
             status = "captcha_blocked"
             error_message = str(exc)
@@ -88,20 +95,20 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
             # Public response is the site's raw payload verbatim (pdp.raw) —
             # the normalized fields on `pdp` (title, price, ...) are only
             # used above for DB storage/dashboard, not exposed to callers.
-            return BatchScrapeItem(url=url, status="success", data=pdp.raw)
+            return BatchScrapeItem(url=url, status="success", data=pdp.raw), False
 
-        return BatchScrapeItem(url=url, status=status, error=error_message, data=not_found_data)
+        return BatchScrapeItem(url=url, status=status, error=error_message, data=not_found_data), is_not_found
     except Exception as exc:
         logger.exception("Unexpected error scraping %s", url)
-        return BatchScrapeItem(url=url, status="failed", error=f"Unexpected error: {exc}")
+        return BatchScrapeItem(url=url, status="failed", error=f"Unexpected error: {exc}"), False
 
 
-@router.post("/{site_key}/pdp", response_model=ScrapeResponse, response_model_exclude_none=True)
+@router.post("/{site_key}/pdp")
 async def scrape_pdp(
     site_key: str,
     body: ScrapeRequest,
     key: AuthedKey = Depends(require_api_key),
-) -> ScrapeResponse:
+) -> dict:
     # Supabase's client is synchronous; every DB call below is offloaded via
     # asyncio.to_thread so a slow lookup/insert doesn't stall the event loop
     # for other concurrent requests.
@@ -109,10 +116,15 @@ async def scrape_pdp(
     if site_id is None:
         raise HTTPException(status_code=404, detail=f"Unsupported site: {site_key}")
 
-    item = await _scrape_one(site_key, site_id, body.url, key)
+    item, is_not_found = await _scrape_one(site_key, site_id, body.url, key)
 
-    if item.status in ("success",):
-        return ScrapeResponse(status="success", data=item.data)
+    if item.status == "success":
+        if is_not_found:
+            # Product confirmed not to exist: the site's own {error, error_msg,
+            # bff_meta, data} envelope IS the response body verbatim, not
+            # wrapped in {"status", "data"} like a genuine successful scrape.
+            return item.data
+        return ScrapeResponse(status="success", data=item.data).model_dump(exclude_none=True)
     if item.status == "rejected":
         raise HTTPException(status_code=429, detail=item.error)
 
@@ -141,4 +153,4 @@ async def scrape_pdp_batch(
     # across the whole app, so firing all of these at once is safe — extra
     # URLs simply queue for a context rather than piling up here.
     results = await asyncio.gather(*(_scrape_one(site_key, site_id, url, key) for url in body.urls))
-    return BatchScrapeResponse(results=list(results))
+    return BatchScrapeResponse(results=[item for item, _ in results])
