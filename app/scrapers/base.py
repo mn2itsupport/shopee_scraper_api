@@ -105,3 +105,13 @@ class BaseScraper(ABC):
         that mode.
         """
         raise NotImplementedError(f"{self.site_key} does not support the Apify transport")
+
+    async def fetch_pdp_via_curl_cffi(self, url: str) -> PDPData:
+        """Fetch `url` with curl_cffi (a plain HTTP client impersonating a
+        real browser's TLS/JA3 fingerprint — no Playwright/CDP involved) and
+        return normalized PDP data. Only called when BROWSER_MODE (or a
+        site's own browser_mode_override, e.g. ShopeeTHScraper's) is
+        "curl_cffi"; optional to implement — sites that don't override this
+        simply can't run in that mode.
+        """
+        raise NotImplementedError(f"{self.site_key} does not support the curl_cffi transport")

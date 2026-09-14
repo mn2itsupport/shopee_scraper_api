@@ -73,13 +73,20 @@ class Settings(BaseSettings):
 
     # shopee_th's own browser_mode_override (see ShopeeTHScraper) — kept
     # separate from the global BROWSER_MODE above so this one site can route
-    # differently (its persistent-profile local browser, or the Apify actor
-    # above, or Bright Data's Dataset API) without affecting shopee_br/vn.
-    # "local" is the persistent-profile + Patchright path this project has
-    # relied on so far; every automated/headless variant of it still hits
-    # Shopee TH's anti-bot layer (see shopee_login.py's comments) — "apify"
-    # is worth trying once you have a token, since it avoids that fight
-    # entirely by running server-side on Apify's own infrastructure.
+    # differently (its persistent-profile local browser, the Apify actor
+    # above, Bright Data's Dataset API, or curl_cffi below) without affecting
+    # shopee_br/vn. "local" is the persistent-profile + Patchright path this
+    # project has relied on so far; every automated/headless variant of it
+    # still hits Shopee TH's anti-bot layer (see shopee_login.py's comments)
+    # — "apify" avoids that fight entirely by running server-side on Apify's
+    # own infrastructure, but its free plan only serves already-cached
+    # products. "curl_cffi" (see _shopee_common.py's _curl_cffi_fetch) is a
+    # third option confirmed via live testing to get past the same
+    # risk-control wall for the page load itself (recovers title/images/
+    # description) without a browser or a third party — just not for
+    # price/rating/sold_count, since those only ever come from the internal
+    # pdp/get_pc API call, which stays risk-control-rejected on every
+    # transport tried so far, curl_cffi included.
     shopee_th_browser_mode_override: str = "local"
 
     # shopee_vn's own override, same mechanism as shopee_th above — empty by

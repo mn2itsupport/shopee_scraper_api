@@ -17,3 +17,15 @@ playwright-stealth==2.0.3
 # for shopee_th specifically; every other site keeps plain Playwright.
 patchright==1.49.1
 jinja2==3.1.4
+# shopee_th's curl_cffi transport only (see ShopeeTHScraper.fetch_pdp_via_curl_cffi /
+# ShopeeScraper._curl_cffi_fetch) — a plain HTTP client that impersonates a
+# real Chrome TLS/JA3 fingerprint. Confirmed via live testing to get past the
+# risk-control wall that blocks shopee_th's page load on both
+# brightdata_unlocker_api (CaptchaBlockedError) and a cold Apify cache miss —
+# recovers title/images from the page's own embedded mfe-initial-data
+# snapshot. Does NOT get price/rating/sold_count: a direct call to the
+# pdp/get_pc API this data actually lives in is confirmed risk-control-
+# rejected (error 90309999, same code _parse_api_body already handles)
+# regardless of session cookies/headers — that endpoint needs a real browser
+# actually executing Shopee's anti-bot JS, which is out of scope here.
+curl_cffi==0.16.3

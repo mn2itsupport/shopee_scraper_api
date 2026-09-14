@@ -52,6 +52,10 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
                 # No browser context needed — a third-party Apify actor runs
                 # server-side and hands back structured JSON in one call.
                 return await scraper.fetch_pdp_via_apify(url)
+            if browser_mode == "curl_cffi":
+                # No browser context needed — a plain HTTP client
+                # impersonating a real browser's TLS fingerprint.
+                return await scraper.fetch_pdp_via_curl_cffi(url)
             async with acquire_context(
                 scraper.site_key, scraper.locale, scraper.timezone_id, scraper.geolocation, scraper.unlocker_country
             ) as context:

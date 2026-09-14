@@ -19,6 +19,8 @@ import json
 import re
 
 import httpx
+from curl_cffi import requests as curl_cffi_requests
+from curl_cffi.requests.exceptions import RequestException as CurlRequestException
 from playwright.async_api import BrowserContext, Route
 
 from app.config import settings
@@ -26,6 +28,7 @@ from app.models.schemas import PDPData
 from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError
 from app.scrapers.captcha import get_captcha_solver, is_captcha_html, is_captcha_page, strip_script_and_style
 from app.scrapers.http_pool import get_client
+from app.scrapers.proxy_provider import get_proxy_provider
 
 _PDP_API_FRAGMENTS = ["pdp/get_pc", "/item/get"]
 _URL_ID_PATTERN = re.compile(r"-i\.(\d+)\.(\d+)")
@@ -92,6 +95,22 @@ def _normalize_shopee_url(url: str) -> str:
         return url
     origin, shop_id, item_id = match.groups()
     return f"{origin}/product-i.{shop_id}.{item_id}"
+
+
+def _playwright_proxy_to_url(proxy: dict | None) -> str | None:
+    """ProxyProvider.next_proxy() returns Playwright's {"server", "username"?,
+    "password"?} shape (credentials split out of the URL) — curl_cffi, like
+    most plain HTTP clients, instead wants one "scheme://user:pass@host:port"
+    string per its `proxies` dict. Only ShopeeScraper._curl_cffi_fetch needs
+    this conversion; every other proxy consumer in this project talks to
+    Playwright directly.
+    """
+    if proxy is None:
+        return None
+    scheme, _, host = proxy["server"].partition("://")
+    if "username" in proxy:
+        return f"{scheme}://{proxy['username']}:{proxy['password']}@{host}"
+    return proxy["server"]
 
 
 class ShopeeScraper(BaseScraper):
@@ -227,25 +246,32 @@ class ShopeeScraper(BaseScraper):
                 raise CaptchaBlockedError(f"Shopee showed a verification/anti-bot wall: {brd_error}")
             raise ScraperError(f"Web Unlocker API request failed: {brd_error}")
 
-        html = resp.text
+        return self._parse_pdp_page_html(resp.text, url)
 
+    def _parse_pdp_page_html(self, html: str, url: str) -> PDPData:
+        """Shared tail for any transport that hands back a plain server-
+        rendered PDP page's HTML (fetch_pdp_via_unlocker_api above,
+        _curl_cffi_fetch below) — everything after the raw response body is
+        in hand, independent of how it was fetched.
+
+        Check ld+json first — it's authoritative for price/rating (unlike
+        bff_data's item below, whose price/stock/rating Shopee nulls out on
+        this transport regardless of item validity), so a real product page
+        never falls through to the not-found check below. bff_data, when
+        also present in the same response, is Shopee's actual internal PDP
+        BFF payload (same {item, account, product_price, product_images,
+        shop_detailed, installment_drawer, product_description, ...} shape
+        the browser transport captures live from pdp/get_pc) — far richer
+        than ld+json's schema.org subset, so it's used as `raw` instead of
+        ld+json's own thinner dict whenever available; price/rating/
+        currency on the returned PDPData still come from ld+json either way
+        (_parse_ld_json_product backfills bff_data['item']'s own price/
+        item_rating from them too, since those are the two fields this
+        transport nulls out).
+        """
         if is_captcha_html(html):
             raise CaptchaBlockedError("Shopee showed a verification/anti-bot wall")
 
-        # Check ld+json first — it's authoritative for price/rating (unlike
-        # bff_data's item below, whose price/stock/rating Shopee nulls out on
-        # this transport regardless of item validity), so a real product page
-        # never falls through to the not-found check below. bff_data, when
-        # also present in the same response, is Shopee's actual internal PDP
-        # BFF payload (same {item, account, product_price, product_images,
-        # shop_detailed, installment_drawer, product_description, ...} shape
-        # the browser transport captures live from pdp/get_pc) — far richer
-        # than ld+json's schema.org subset, so it's used as `raw` instead of
-        # ld+json's own thinner dict whenever available; price/rating/
-        # currency on the returned PDPData still come from ld+json either
-        # way (_parse_ld_json_product backfills bff_data['item']'s own price/
-        # item_rating from them too, since those are the two fields this
-        # transport nulls out).
         product = self._extract_ld_json_product(html)
         if product is not None:
             bff_data = self._extract_pdp_bff_data(html, url)
@@ -562,6 +588,60 @@ class ShopeeScraper(BaseScraper):
             image_urls=[i for i in images if isinstance(i, str)],
             raw=record,
         )
+
+    async def _curl_cffi_fetch(self, url: str) -> PDPData:
+        """Shared implementation for BaseScraper.fetch_pdp_via_curl_cffi —
+        not exposed directly on ShopeeScraper; a country adapter opts in by
+        overriding fetch_pdp_via_curl_cffi to call this (currently only
+        ShopeeTHScraper does — see its own comment for why).
+
+        Plain HTTP GET via curl_cffi (impersonating a real Chrome TLS/JA3
+        fingerprint — no browser/Playwright/CDP at all), through the same
+        brightdata_residential proxy the persistent-profile browser context
+        uses, country-targeted the same way via unlocker_country. Confirmed
+        via live testing to load shopee_th's product page cleanly (no
+        CaptchaBlockedError) on a URL that both brightdata_unlocker_api
+        (CaptchaBlockedError — Bright Data's own render stalled waiting on
+        Shopee's risk-control-rejected pdp/get_pc call) and a cold Apify
+        cache miss both failed on — recovers title/images/description from
+        the same embedded <script type="text/mfe-initial-data"> snapshot
+        _parse_pdp_page_html already knows how to read.
+
+        Does NOT attempt to call Shopee's internal pdp/get_pc API directly:
+        confirmed via live testing that a direct call is risk-control-
+        rejected (error 90309999 — _parse_api_body's existing "risk-control
+        rejection" branch) even carrying this same session's cookies and
+        ordinary browser-shaped headers (Referer, Accept, X-Api-Source),
+        meaning it needs something only a real browser actually executing
+        Shopee's own anti-bot JS produces — out of scope here. So, same
+        ceiling as the Unlocker API transport: price/rating/sold_count come
+        back null; only title/images/description are real.
+        """
+        url = _normalize_shopee_url(url)
+        proxy_url = _playwright_proxy_to_url(get_proxy_provider().next_proxy(country=self.unlocker_country))
+        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+
+        try:
+            async with curl_cffi_requests.AsyncSession(
+                impersonate="chrome124", proxies=proxies, timeout=settings.scrape_timeout_seconds
+            ) as session:
+                if settings.shopee_warm_up_home_page:
+                    # Best-effort, same reasoning as fetch_pdp's own warm-up:
+                    # let the site's first-visit cookies get set before the
+                    # real request — a failure here shouldn't sink the
+                    # product page request that follows.
+                    try:
+                        await session.get(f"https://{self.base_domain}")
+                    except CurlRequestException:
+                        pass
+                resp = await session.get(url)
+        except CurlRequestException as exc:
+            raise ScraperError(f"curl_cffi request failed: {type(exc).__name__}: {exc}") from exc
+
+        if resp.status_code >= 400:
+            raise ScraperError(f"curl_cffi request failed: HTTP {resp.status_code}")
+
+        return self._parse_pdp_page_html(resp.text, url)
 
     def _extract_pdp_bff_data(self, html: str, url: str) -> dict | None:
         """Returns the full cached PDP BFF payload — {item, account,
