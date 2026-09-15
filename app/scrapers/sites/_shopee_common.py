@@ -748,14 +748,15 @@ class ShopeeScraper(BaseScraper):
 
             # bff_data is only ever the inner data payload — same as
             # _extract_pdp_bff_data's own docstring says, it's never the full
-            # {error, error_msg, data, bff_meta} envelope a live pdp/get_pc
-            # capture returns, since this transport never touches that XHR.
-            # Wrap it the same way _parse_api_body's non-full-envelope branch
-            # does, so `raw`'s top-level shape is identical regardless of
-            # which extraction path (ld+json-found vs not) produced it —
-            # error/error_msg/bff_meta are always present (as null
-            # placeholders) rather than silently absent on this branch only.
-            raw = {"error": None, "error_msg": None, "bff_meta": None, "data": raw}
+            # {bff_meta, error, error_msg, data} envelope (real key order,
+            # confirmed live) a live pdp/get_pc capture returns, since this
+            # transport never touches that XHR. Wrap it the same way
+            # _parse_api_body's non-full-envelope branch does, so `raw`'s
+            # top-level shape is identical regardless of which extraction
+            # path (ld+json-found vs not) produced it — bff_meta/error/
+            # error_msg are always present (as null placeholders) rather
+            # than silently absent on this branch only.
+            raw = {"bff_meta": None, "error": None, "error_msg": None, "data": raw}
 
         return PDPData(
             site_key=self.site_key,
@@ -852,7 +853,7 @@ class ShopeeScraper(BaseScraper):
         raw = (
             body
             if is_full_envelope
-            else {"error": None, "error_msg": None, "bff_meta": None, "data": data if data.get("item") is not None else item}
+            else {"bff_meta": None, "error": None, "error_msg": None, "data": data if data.get("item") is not None else item}
         )
 
         return PDPData(

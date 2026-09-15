@@ -15,16 +15,16 @@ class ProductNotFoundError(ScraperError):
     with no data rather than an error.
 
     `raw`, when the detection path has one, is the site's own not-found envelope
-    (e.g. Shopee's {error, error_msg, bff_meta, data} shape with the real numeric
-    error code) — callers surface this as the response's `data` verbatim, same as
-    a found product's raw payload, rather than returning `data: null`. Detection
-    paths with no such envelope to confirm against fall back to a placeholder with
-    every field null.
+    (e.g. Shopee's {bff_meta, error, error_msg, data} shape — real key order, per
+    a live capture — with the real numeric error code) — callers surface this as
+    the response's `data` verbatim, same as a found product's raw payload, rather
+    than returning `data: null`. Detection paths with no such envelope to confirm
+    against fall back to a placeholder with every field null.
     """
 
     def __init__(self, message: str, *, raw: dict | None = None) -> None:
         super().__init__(message)
-        self.raw = raw if raw is not None else {"error": None, "error_msg": None, "bff_meta": None, "data": None}
+        self.raw = raw if raw is not None else {"bff_meta": None, "error": None, "error_msg": None, "data": None}
 
 
 class CaptchaBlockedError(Exception):

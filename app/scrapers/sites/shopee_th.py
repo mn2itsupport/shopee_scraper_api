@@ -54,6 +54,51 @@ _CURL_CFFI_NOISE_KEYS_ITEM = frozenset(
 _XTRACTO_PRICE_FIELDS = ("price", "price_min", "price_max", "price_before_discount", "price_min_before_discount", "price_max_before_discount")
 _CDN_IMAGE_ID = re.compile(r"/file/([^/?#]+)")
 
+# item's own key sequence on a real live pdp/get_pc capture — confirmed
+# against a real shopee_th response (see ThaiResponse.txt). xtracto's own
+# record shape doesn't share this order (it's the actor's own field order),
+# so _xtracto_record_to_get_pc_raw's item dict is rebuilt in this sequence
+# rather than left as whatever order dict(record) happened to produce, to
+# look identical to a native capture regardless of which fields the actor
+# actually populated. Any field the actor returns that isn't in this list
+# (actor-only, not part of get_pc's own shape) is appended after, in
+# whatever order it was already in.
+_GET_PC_ITEM_KEY_ORDER = (
+    "item_id", "shop_id", "item_status", "status", "item_type", "reference_item_id",
+    "title", "image", "label_ids", "is_adult", "is_preview", "flag",
+    "is_service_by_shopee", "condition", "cat_id", "has_low_fulfillment_rate",
+    "is_live_streaming_price", "currency", "brand", "brand_id", "show_discount",
+    "ctime", "item_rating", "cb_option", "has_model_with_available_shopee_stock",
+    "shop_location", "attributes", "rich_text_description", "invoice_option",
+    "is_category_failed", "is_prescription_item", "preview_info",
+    "show_prescription_feed", "is_alcohol_product", "is_infant_milk_formula_product",
+    "is_unavailable", "is_partial_fulfilled", "is_presale", "is_presale_deposit_item",
+    "is_presale_deposit_made", "description", "categories", "fe_categories",
+    "item_has_video", "presale_dday_start_time", "is_lowest_price_at_shopee",
+    "display_description_disclosure_rsku_redirection", "display_similar_sold",
+    "title_type", "authorized_brand_name", "is_sexual", "models", "tier_variations",
+    "size_chart", "size_chart_info", "welcome_package_type", "is_free_gift",
+    "deep_discount", "is_low_price_eligible", "bundle_deal_info", "add_on_deal_info",
+    "shipping_icon_type", "badge_icon_type", "spl_info", "estimated_days",
+    "is_pre_order", "is_free_shipping", "overall_purchase_limit", "min_purchase_limit",
+    "is_hide_stock", "stock", "normal_stock", "current_promotion_reserved_stock",
+    "can_use_wholesale", "wholesale_tier_list", "price", "raw_discount",
+    "hidden_price_display", "price_min", "price_max", "price_before_discount",
+    "price_min_before_discount", "price_max_before_discount", "other_stock",
+    "discount_stock", "current_promotion_has_reserve_stock", "complaint_policy",
+    "show_recycling_info", "should_show_amp_tag", "all_models_has_pre_order",
+    "is_item_inherited", "max_quantity", "drug_details", "selected_real_models",
+    "size_tier_variation_idx", "is_fashion_item", "social_proof_label", "title_tr",
+    "description_tr", "rich_text_description_tr", "stock_display",
+    "max_quantity_display", "disclaimer",
+)
+
+
+def _reorder_like(d: dict, key_order: tuple[str, ...]) -> dict:
+    ordered = {k: d[k] for k in key_order if k in d}
+    ordered.update({k: v for k, v in d.items() if k not in ordered})
+    return ordered
+
 
 def _xtracto_image_id(image_url: str) -> str:
     # Native item.images is a list of bare CDN file ids (e.g.
@@ -99,8 +144,9 @@ def _xtracto_record_to_get_pc_raw(record: dict) -> dict:
         "total_rating_count": item.pop("total_ratings", None),
     }
     item.pop("shop", None)
+    item = _reorder_like(item, _GET_PC_ITEM_KEY_ORDER)
 
-    return {"error": None, "error_msg": None, "bff_meta": None, "data": {"item": item}}
+    return {"bff_meta": None, "error": None, "error_msg": None, "data": {"item": item}}
 
 
 def _trim_curl_cffi_raw(raw: dict) -> dict:
