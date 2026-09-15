@@ -30,6 +30,13 @@ from app.scrapers.captcha import get_captcha_solver, is_captcha_html, is_captcha
 from app.scrapers.http_pool import get_client
 from app.scrapers.proxy_provider import get_proxy_provider
 
+# Shopee's own "dead/invalid item_id or shop_id" error code — confirmed
+# repeatedly against real dead URLs on shopee_vn (via _PDP_FETCH_ERROR below)
+# and shopee_br (via the live pdp/get_pc envelope in _parse_api_body): this
+# is a genuine "item doesn't exist" signal, not risk-control/anti-bot, so it
+# gets ProductNotFoundError treatment wherever it shows up rather than being
+# lumped in with the generic CaptchaBlockedError retry path.
+_ITEM_NOT_FOUND_ERROR_CODE = 266900002
 _PDP_API_FRAGMENTS = ["pdp/get_pc", "/item/get"]
 _URL_ID_PATTERN = re.compile(r"-i\.(\d+)\.(\d+)")
 _UNLOCKER_API_URL = "https://api.brightdata.com/request"
@@ -288,7 +295,7 @@ class ShopeeScraper(BaseScraper):
             raise ProductNotFoundError(
                 f"Shopee's own PDP data fetch failed for this item (error code {pdp_fetch_error.group(1)}) "
                 "— dead/invalid item_id or shop_id in the URL",
-                raw={"error": int(pdp_fetch_error.group(1)), "error_msg": None, "bff_meta": None, "data": None},
+                raw={"bff_meta": None, "error": int(pdp_fetch_error.group(1)), "error_msg": None, "data": None},
             )
 
         bff_data = self._extract_pdp_bff_data(html, url)
@@ -793,6 +800,18 @@ class ShopeeScraper(BaseScraper):
         data = body.get("data") or {}
         item = data.get("item") or data
         if not item:
+            if body.get("error") == _ITEM_NOT_FOUND_ERROR_CODE:
+                # Confirmed dead/invalid item_id or shop_id (same code
+                # _PDP_FETCH_ERROR handles above, confirmed live on
+                # shopee_br: {"bff_meta": None, "error": 266900002,
+                # "error_msg": None, "data": None}) — a genuine "item
+                # doesn't exist" result, not risk-control, so this counts as
+                # a successful scrape with no data rather than a retryable
+                # CaptchaBlockedError.
+                raise ProductNotFoundError(
+                    f"Shopee's PDP API confirms this item doesn't exist (error code {body.get('error')})",
+                    raw=body,
+                )
             if "error" in body:
                 # Shopee's risk-control layer can reject the live pdp/get_pc
                 # call with HTTP 200 and a minified error body instead of a
