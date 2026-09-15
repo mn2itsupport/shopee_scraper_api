@@ -5,7 +5,7 @@ import re
 
 from app.config import settings
 from app.models.schemas import PDPData
-from app.scrapers.base import ProductNotFoundError
+from app.scrapers.base import ScraperError
 from app.scrapers.sites._shopee_common import ShopeeScraper
 
 # curl_cffi's embedded mfe-initial-data snapshot duplicates a handful of
@@ -256,9 +256,20 @@ class ShopeeTHScraper(ShopeeScraper):
         # live one, at least recovers real title/images/description instead
         # of nothing, fall back to it here rather than surface a possibly-
         # wrong not-found straight from the actor's own weak heuristic.
+        #
+        # Widened from ProductNotFoundError to ScraperError (its parent —
+        # catches both) after confirming live (2026-09-15) that the Apify
+        # account can hit a hard account-level failure (403 "Monthly usage
+        # hard limit exceeded", plus an observed 400) that isn't the actor's
+        # own per-item not-found signal at all — _apify_fetch_xtracto raises
+        # that as ScraperError, which used to propagate straight out of this
+        # method and fail every shopee_th request outright while the Apify
+        # account is capped. Same fallback either way: curl_cffi can't see
+        # price/rating/sold either, but still recovers real title/images/
+        # description instead of the request failing completely.
         try:
             pdp = await self._apify_fetch_xtracto(url)
-        except ProductNotFoundError:
+        except ScraperError:
             return await self.fetch_pdp_via_curl_cffi(url)
         return pdp.model_copy(update={"raw": _xtracto_record_to_get_pc_raw(pdp.raw)})
 
