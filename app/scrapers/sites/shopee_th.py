@@ -8,42 +8,49 @@ from app.models.schemas import PDPData
 from app.scrapers.base import ProductNotFoundError
 from app.scrapers.sites._shopee_common import ShopeeScraper
 
-# Shopee's own UI/experiment plumbing — feature-flag toggles, banner/upsell
-# placements, none of it real product data — present in the payload
-# _curl_cffi_fetch returns (same underlying cached PDP BFF shape
-# _extract_pdp_bff_data always returns) alongside item/price/images/etc.
-# Stripped only from THIS transport's response (see fetch_pdp_via_curl_cffi
-# below), by explicit request — every other Shopee site/transport still
-# returns _parse_api_body's/_parse_pdp_page_html's output verbatim.
-_CURL_CFFI_NOISE_KEYS_DATA = frozenset(
+# curl_cffi's embedded mfe-initial-data snapshot duplicates a handful of
+# item/model fields under their legacy pre-get_pc names (itemid/shopid/name/
+# images/cod_flag, models[].itemid/modelid/promotionid) alongside the
+# current get_pc-named fields (item_id/shop_id/title/image,
+# models[].item_id/model_id/promotion_id) — confirmed live (2026-09-15)
+# these always carry the same value as their current-named counterpart, so
+# they're pure legacy cruft rather than distinct data. The rest of this set
+# is the same problem one level removed: a real pdp/get_pc capture
+# (ThaiResponse.txt) only ever has these as fields on a *different* `data`
+# sibling — age_gate/coin_info on `data` itself (already preserved verbatim
+# there — see fetch_pdp_via_curl_cffi), cmt_count/liked/liked_count/
+# historical_sold/global_sold/should_move_ratings_above on `product_review`,
+# show_best_price_guarantee/show_official_shop_label_in_title/
+# show_original_guarantee/show_shopee_verified_label on `product_meta`,
+# is_cc_installment_payment_eligible/is_non_cc_installment_payment_eligible
+# on `promotion_info.item_installment_eligibility`, shop_vouchers as its own
+# top-level sibling, long_images/video_info_list on `product_images` — but
+# curl_cffi's snapshot also nests a duplicate copy directly under item, with
+# the same value (confirmed live 2026-09-15). credit_insurance_data/
+# coin_earn_label/has_lowest_price_guarantee have no such counterpart
+# anywhere and don't appear in a real capture at all. Stripped so a
+# shopee_th response looks like a real pdp/get_pc capture's shape
+# regardless of transport — dict comprehensions below only ever filter,
+# never reorder, so every remaining key keeps its original relative
+# position.
+_CURL_CFFI_LEGACY_ITEM_KEYS = frozenset(
     {
-        "design_control",
-        "coin_info",
-        "age_gate",
-        "membership_exclusive",
-        "membership_exclusive_teaser",
-        "ongoing_banner",
-        "teaser_banner",
-        "button_group",
-        "service_entrance",
-        "service_drawer",
-        "removed_fields",
-        "product_meta",
+        "itemid", "shopid", "name", "images", "cod_flag", "age_gate", "coin_info", "credit_insurance_data",
+        "cmt_count", "coin_earn_label", "global_sold", "has_lowest_price_guarantee", "historical_sold",
+        "is_cc_installment_payment_eligible", "is_non_cc_installment_payment_eligible", "liked", "liked_count",
+        "long_images", "shop_vouchers", "should_move_ratings_above", "show_best_price_guarantee",
+        "show_official_shop_label_in_title", "show_original_guarantee", "show_shopee_verified_label",
+        "video_info_list",
     }
 )
-_CURL_CFFI_NOISE_KEYS_ITEM = frozenset(
-    {
-        "credit_insurance_data",
-        "age_gate",
-        "coin_info",
-        "size_chart",
-        "size_chart_info",
-        "welcome_package_type",
-        "spl_info",
-        "disclaimer",
-        "social_proof_label",
-    }
-)
+_CURL_CFFI_LEGACY_MODEL_KEYS = frozenset({"itemid", "modelid", "promotionid"})
+# item.item_rating nests rating_count/total_rating_count too — same
+# duplicate-of-product_review problem as the item-level keys above, but one
+# level deeper, so it needs its own filter rather than a flat key match.
+_CURL_CFFI_LEGACY_ITEM_RATING_KEYS = frozenset({"rating_count", "total_rating_count"})
+# data.event_type and data.product_attributes.fresh_featured_attrs: no
+# get_pc counterpart anywhere, confirmed absent from ThaiResponse.txt.
+_CURL_CFFI_LEGACY_DATA_KEYS = frozenset({"event_type"})
 
 
 # Price fields on a live pdp/get_pc capture are Shopee's internal integer
@@ -149,15 +156,35 @@ def _xtracto_record_to_get_pc_raw(record: dict) -> dict:
     return {"bff_meta": None, "error": None, "error_msg": None, "data": {"item": item}}
 
 
-def _trim_curl_cffi_raw(raw: dict) -> dict:
+def _dedupe_curl_cffi_legacy_keys(raw: dict) -> dict:
     data = raw.get("data")
     if not isinstance(data, dict):
         return raw
-    trimmed_data = {k: v for k, v in data.items() if k not in _CURL_CFFI_NOISE_KEYS_DATA}
-    item = trimmed_data.get("item")
-    if isinstance(item, dict):
-        trimmed_data["item"] = {k: v for k, v in item.items() if k not in _CURL_CFFI_NOISE_KEYS_ITEM}
-    return {**raw, "data": trimmed_data}
+    deduped_data = {k: v for k, v in data.items() if k not in _CURL_CFFI_LEGACY_DATA_KEYS}
+
+    product_attributes = deduped_data.get("product_attributes")
+    if isinstance(product_attributes, dict):
+        deduped_data["product_attributes"] = {k: v for k, v in product_attributes.items() if k != "fresh_featured_attrs"}
+
+    item = deduped_data.get("item")
+    if not isinstance(item, dict):
+        return {**raw, "data": deduped_data}
+
+    deduped_item = {k: v for k, v in item.items() if k not in _CURL_CFFI_LEGACY_ITEM_KEYS}
+
+    item_rating = deduped_item.get("item_rating")
+    if isinstance(item_rating, dict):
+        deduped_item["item_rating"] = {k: v for k, v in item_rating.items() if k not in _CURL_CFFI_LEGACY_ITEM_RATING_KEYS}
+
+    models = deduped_item.get("models")
+    if isinstance(models, list):
+        deduped_item["models"] = [
+            {k: v for k, v in model.items() if k not in _CURL_CFFI_LEGACY_MODEL_KEYS} if isinstance(model, dict) else model
+            for model in models
+        ]
+
+    deduped_data["item"] = deduped_item
+    return {**raw, "data": deduped_data}
 
 
 class ShopeeTHScraper(ShopeeScraper):
@@ -237,4 +264,4 @@ class ShopeeTHScraper(ShopeeScraper):
 
     async def fetch_pdp_via_curl_cffi(self, url: str) -> PDPData:
         pdp = await self._curl_cffi_fetch(url)
-        return pdp.model_copy(update={"raw": _trim_curl_cffi_raw(pdp.raw)})
+        return pdp.model_copy(update={"raw": _dedupe_curl_cffi_legacy_keys(pdp.raw)})
