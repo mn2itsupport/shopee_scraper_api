@@ -133,12 +133,11 @@ class Settings(BaseSettings):
     shopee_ph_browser_mode_override: str = "curl_cffi"
 
     # shopee_id's own override — also defaults to "curl_cffi" for the same
-    # reason, but confirmed live 2026-09-16 that this proxy's residential
-    # zone does NOT yet have "id" country-targeting enabled (CONNECT tunnel
-    # failed, 400) the same way "sg" needed adding — see
-    # ShopeeIDScraper.browser_mode_override's own comment. Add "id" to
-    # BRIGHTDATA_RESIDENTIAL_ZONE's allowed countries before this will
-    # actually reach shopee.co.id.
+    # reason. Initially hit CONNECT tunnel failed (400) until "id" was added
+    # to this proxy's residential zone's country-targeting, same fix "sg"
+    # needed — confirmed live 2026-09-16, after that fix, reaching
+    # shopee.co.id cleanly (see ShopeeIDScraper.browser_mode_override's own
+    # comment).
     shopee_id_browser_mode_override: str = "curl_cffi"
 
     # "static_list": round-robin PROXY_LIST. "rotating_session": one sticky

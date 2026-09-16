@@ -15,20 +15,22 @@ class ShopeeIDScraper(ShopeeScraper):
     geolocation = {"latitude": -6.2088, "longitude": 106.8456}
     unlocker_country = "id"
     # not_found_signature left unset (unverified localized copy) — same as
-    # shopee_sg.py/shopee_th.py. The generic _PDP_FETCH_ERROR check in
-    # _parse_pdp_page_html should catch dead/invalid item_id or shop_id the
-    # same way it's confirmed to for shopee_sg/my/ph/br — not yet
-    # independently confirmed for shopee.co.id specifically since curl_cffi
-    # can't yet reach it at all (see browser_mode_override comment below).
+    # shopee_sg.py/shopee_th.py. Not needed in practice: confirmed live
+    # 2026-09-16 that a dead/invalid item_id or shop_id on shopee.co.id is
+    # already caught generically by _parse_pdp_page_html's _PDP_FETCH_ERROR
+    # check (error code 266900002, same ProductNotFoundError raw shape
+    # {bff_meta, error, error_msg, data} shopee_sg/my/ph/br get via the same
+    # shared tail).
 
-    # See ShopeeSGScraper's own comment for the full picture. UNLIKE
-    # shopee_my/ph, curl_cffi against shopee.co.id still gets CONNECT tunnel
-    # failed (400) via BRIGHTDATA_RESIDENTIAL_ZONE as of 2026-09-16 — that
-    # zone's country-targeting needs "id" added too (same fix already
-    # applied for "sg"; see proxy_provider.py's "-country-<cc>" suffix)
-    # before this transport (or "local") can reach shopee.co.id at all.
-    # Defaulting to curl_cffi anyway since it's the correct transport once
-    # that's fixed — same trajectory shopee_sg went through.
+    # See ShopeeSGScraper's own comment for the full picture — same
+    # reasoning applies here. curl_cffi initially got CONNECT tunnel failed
+    # (400) via BRIGHTDATA_RESIDENTIAL_ZONE until "id" was added to that
+    # zone's country-targeting (same fix already applied for "sg"; see
+    # proxy_provider.py's "-country-<cc>" suffix) — confirmed live
+    # 2026-09-16, after that fix, reaching shopee.co.id cleanly and
+    # correctly raising ProductNotFoundError for a dead item_id; not yet
+    # independently confirmed recovering real title/price/images for a live
+    # product on this domain specifically.
     @property
     def browser_mode_override(self) -> str:
         return settings.shopee_id_browser_mode_override
