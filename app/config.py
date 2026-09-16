@@ -112,15 +112,34 @@ class Settings(BaseSettings):
     # browser's exit IP isn't Railway's raw datacenter IP.
     shopee_br_browser_mode_override: str = ""
 
-    # shopee_sg/my/id/ph's own overrides, same mechanism as above — empty by
-    # default (falls back to the global BROWSER_MODE). Not yet independently
-    # confirmed against these countries' own anti-bot behavior; set to
-    # "apify" (via the xtracto actor, same as shopee_vn) if the default
-    # transport hits the same risk-control wall TH/VN/BR did.
-    shopee_sg_browser_mode_override: str = ""
-    shopee_my_browser_mode_override: str = ""
-    shopee_id_browser_mode_override: str = ""
-    shopee_ph_browser_mode_override: str = ""
+    # shopee_sg's own override, same mechanism as above. Defaults to
+    # "curl_cffi" (not empty, unlike the others below) — confirmed live
+    # 2026-09-16 that both "local" and the global default
+    # "brightdata_unlocker_api" get risk-control rejected on shopee.sg's live
+    # pdp/get_pc call, same wall shopee_br/th/vn hit, while curl_cffi gets
+    # past it for the page load itself (real title/currency/images; see
+    # ShopeeSGScraper's own comment for the price/rating/sold_count ceiling
+    # that transport still has).
+    shopee_sg_browser_mode_override: str = "curl_cffi"
+
+    # shopee_my/ph's own overrides, same mechanism/reasoning as
+    # shopee_sg_browser_mode_override above — confirmed live 2026-09-16 that
+    # curl_cffi reaches both domains cleanly via the existing
+    # brightdata_residential proxy (no extra zone country-targeting needed,
+    # unlike shopee_sg/shopee_id) and correctly handles a dead item_id the
+    # same way shopee_sg/br do; not yet independently confirmed recovering a
+    # real live product's data on either domain specifically.
+    shopee_my_browser_mode_override: str = "curl_cffi"
+    shopee_ph_browser_mode_override: str = "curl_cffi"
+
+    # shopee_id's own override — also defaults to "curl_cffi" for the same
+    # reason, but confirmed live 2026-09-16 that this proxy's residential
+    # zone does NOT yet have "id" country-targeting enabled (CONNECT tunnel
+    # failed, 400) the same way "sg" needed adding — see
+    # ShopeeIDScraper.browser_mode_override's own comment. Add "id" to
+    # BRIGHTDATA_RESIDENTIAL_ZONE's allowed countries before this will
+    # actually reach shopee.co.id.
+    shopee_id_browser_mode_override: str = "curl_cffi"
 
     # "static_list": round-robin PROXY_LIST. "rotating_session": one sticky
     # gateway (PROXY_GATEWAY_SERVER) with a fresh random session id appended
