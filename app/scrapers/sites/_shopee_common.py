@@ -18,6 +18,7 @@ import asyncio
 import json
 import re
 
+import certifi
 import httpx
 from curl_cffi import requests as curl_cffi_requests
 from curl_cffi.requests.exceptions import RequestException as CurlRequestException
@@ -630,7 +631,22 @@ class ShopeeScraper(BaseScraper):
 
         try:
             async with curl_cffi_requests.AsyncSession(
-                impersonate="chrome124", proxies=proxies, timeout=settings.scrape_timeout_seconds
+                impersonate="chrome124",
+                proxies=proxies,
+                timeout=settings.scrape_timeout_seconds,
+                # Explicit path, not just verify=True (curl_cffi's default):
+                # curl_cffi's own env-var check (REQUESTS_CA_BUNDLE /
+                # CURL_CA_BUNDLE) silently overrides its bundled-certifi
+                # default if either is set in the process environment — seen
+                # on Railway prod (CertificateVerifyError: "unable to get
+                # local issuer certificate"), not reproducible locally, where
+                # the hosting platform's own env most likely sets one of
+                # those to a path with an incomplete/stale CA store. Passing
+                # certifi's own bundle directly bypasses that env lookup
+                # entirely (curl_cffi only consults the env vars when verify
+                # is True/None) so this transport always verifies against a
+                # known-good, complete CA store regardless of the container.
+                verify=certifi.where(),
             ) as session:
                 if settings.shopee_warm_up_home_page:
                     # Best-effort, same reasoning as fetch_pdp's own warm-up:
