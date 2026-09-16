@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     # browser's exit IP isn't Railway's raw datacenter IP.
     shopee_br_browser_mode_override: str = ""
 
+    # shopee_sg/my/id/ph's own overrides, same mechanism as above — empty by
+    # default (falls back to the global BROWSER_MODE). Not yet independently
+    # confirmed against these countries' own anti-bot behavior; set to
+    # "apify" (via the xtracto actor, same as shopee_vn) if the default
+    # transport hits the same risk-control wall TH/VN/BR did.
+    shopee_sg_browser_mode_override: str = ""
+    shopee_my_browser_mode_override: str = ""
+    shopee_id_browser_mode_override: str = ""
+    shopee_ph_browser_mode_override: str = ""
+
     # "static_list": round-robin PROXY_LIST. "rotating_session": one sticky
     # gateway (PROXY_GATEWAY_SERVER) with a fresh random session id appended
     # to the username on every request — the pattern residential-proxy

@@ -47,7 +47,11 @@ insert into sites (site_key, display_name, base_domain)
 values
     ('shopee_br', 'Shopee Brazil', 'shopee.com.br'),
     ('shopee_th', 'Shopee Thailand', 'shopee.co.th'),
-    ('shopee_vn', 'Shopee Vietnam', 'shopee.vn')
+    ('shopee_vn', 'Shopee Vietnam', 'shopee.vn'),
+    ('shopee_sg', 'Shopee Singapore', 'shopee.sg'),
+    ('shopee_my', 'Shopee Malaysia', 'shopee.com.my'),
+    ('shopee_id', 'Shopee Indonesia', 'shopee.co.id'),
+    ('shopee_ph', 'Shopee Philippines', 'shopee.ph')
 on conflict (site_key) do nothing;
 
 create table if not exists usage_logs (

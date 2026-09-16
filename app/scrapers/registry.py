@@ -6,6 +6,10 @@ from app.models.schemas import PDPData
 from app.scrapers.base import BaseScraper, CaptchaBlockedError, ScraperError
 from app.scrapers.browser_pool import acquire_context
 from app.scrapers.sites.shopee_br import ShopeeBRScraper
+from app.scrapers.sites.shopee_id import ShopeeIDScraper
+from app.scrapers.sites.shopee_my import ShopeeMYScraper
+from app.scrapers.sites.shopee_ph import ShopeePHScraper
+from app.scrapers.sites.shopee_sg import ShopeeSGScraper
 from app.scrapers.sites.shopee_th import ShopeeTHScraper
 from app.scrapers.sites.shopee_vn import ShopeeVNScraper
 
@@ -15,6 +19,10 @@ SCRAPER_REGISTRY: dict[str, BaseScraper] = {
     "shopee_br": ShopeeBRScraper(),
     "shopee_th": ShopeeTHScraper(),
     "shopee_vn": ShopeeVNScraper(),
+    "shopee_sg": ShopeeSGScraper(),
+    "shopee_my": ShopeeMYScraper(),
+    "shopee_id": ShopeeIDScraper(),
+    "shopee_ph": ShopeePHScraper(),
 }
 
 
