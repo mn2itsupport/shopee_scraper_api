@@ -634,19 +634,25 @@ class ShopeeScraper(BaseScraper):
                 impersonate="chrome124",
                 proxies=proxies,
                 timeout=settings.scrape_timeout_seconds,
-                # Explicit path, not just verify=True (curl_cffi's default):
-                # curl_cffi's own env-var check (REQUESTS_CA_BUNDLE /
-                # CURL_CA_BUNDLE) silently overrides its bundled-certifi
-                # default if either is set in the process environment — seen
-                # on Railway prod (CertificateVerifyError: "unable to get
-                # local issuer certificate"), not reproducible locally, where
-                # the hosting platform's own env most likely sets one of
-                # those to a path with an incomplete/stale CA store. Passing
-                # certifi's own bundle directly bypasses that env lookup
-                # entirely (curl_cffi only consults the env vars when verify
-                # is True/None) so this transport always verifies against a
-                # known-good, complete CA store regardless of the container.
-                verify=certifi.where(),
+                # PROXY_MODE=brightdata_unlocker MITMs the TLS connection to
+                # inspect/unblock responses (see browser_pool.py's own
+                # ignore_https_errors=... for the same proxy mode) — it
+                # presents its own certificate instead of the target site's,
+                # so no CA bundle (curl_cffi's default, nor certifi's own,
+                # confirmed live 2026-09-16 against Railway prod) will ever
+                # verify it; this isn't the "stale env var" case a plain
+                # certifi.where() bundle fixes; requires actually skipping
+                # verification for this proxy mode, same as Playwright does.
+                # Any other proxy mode (plain forward/residential proxy, no
+                # MITM) still verifies normally against certifi's bundle —
+                # explicit path rather than verify=True (curl_cffi's
+                # default) because curl_cffi's own env-var check
+                # (REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE) silently overrides its
+                # bundled-certifi default if either is set in the process
+                # environment, and only consults those env vars when verify
+                # is True/None — passing certifi's own bundle directly
+                # bypasses that lookup entirely.
+                verify=False if settings.proxy_mode == "brightdata_unlocker" else certifi.where(),
             ) as session:
                 if settings.shopee_warm_up_home_page:
                     # Best-effort, same reasoning as fetch_pdp's own warm-up:
