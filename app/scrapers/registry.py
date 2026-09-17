@@ -3,7 +3,7 @@ import random
 
 from app.config import settings
 from app.models.schemas import PDPData
-from app.scrapers.base import BaseScraper, CaptchaBlockedError, ScraperError
+from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError
 from app.scrapers.browser_pool import acquire_context
 from app.scrapers.sites.shopee_br import ShopeeBRScraper
 from app.scrapers.sites.shopee_id import ShopeeIDScraper
@@ -37,6 +37,15 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
     """Runs the adapter inside a fresh browser context, retrying on CAPTCHA
     with a brand-new context (and rotated proxy) up to CAPTCHA_MAX_RETRIES
     times. Re-raises CaptchaBlockedError if still blocked after retries.
+
+    A plain ScraperError also gets the same number of retries (shorter
+    backoff, no anti-bot-avoidance reasoning needed) — confirmed live
+    (2026-09-17) that shopee_th's curl_cffi transport can hit a one-off
+    HTTP 502 from the residential proxy that succeeds again moments later
+    on a fresh proxy connection (get_proxy_provider().next_proxy() hands out
+    a new one every call); failing the whole request on a single transient
+    proxy/network hiccup wasted a retry budget that was already sitting
+    right here unused for anything but CAPTCHA.
     """
     scraper = get_scraper(site_key)
     last_error: Exception | None = None
@@ -77,8 +86,20 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
             # within a couple seconds looks like the same bad pattern that
             # tripped it in the first place.
             await asyncio.sleep(8 * (attempt + 1) + random.uniform(0, 4))
-        except ScraperError:
+        except ProductNotFoundError:
+            # A confirmed "item doesn't exist" result, not a failure — retrying
+            # would just re-confirm the same not-found outcome at the cost of
+            # another CAPTCHA_MAX_RETRIES-worth of wasted attempts.
             raise
+        except ScraperError as exc:
+            last_error = exc
+            if attempt == settings.captcha_max_retries:
+                raise
+            # Short backoff — unlike CaptchaBlockedError above, this isn't
+            # dodging a risk engine, just giving a transient network/proxy
+            # failure (e.g. a one-off HTTP 502) a moment before the next
+            # attempt's fresh proxy connection.
+            await asyncio.sleep(1 * (attempt + 1) + random.uniform(0, 1))
 
     assert last_error is not None
     raise last_error
