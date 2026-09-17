@@ -38,17 +38,22 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
     with a brand-new context (and rotated proxy) up to CAPTCHA_MAX_RETRIES
     times. Re-raises CaptchaBlockedError if still blocked after retries.
 
-    A plain ScraperError also gets the same number of retries (shorter
-    backoff, no anti-bot-avoidance reasoning needed) — confirmed live
-    (2026-09-17) that shopee_th's curl_cffi transport can hit a one-off
-    HTTP 502 from the residential proxy that succeeds again moments later
-    on a fresh proxy connection (get_proxy_provider().next_proxy() hands out
-    a new one every call); failing the whole request on a single transient
-    proxy/network hiccup wasted a retry budget that was already sitting
-    right here unused for anything but CAPTCHA.
+    A plain ScraperError also gets one retry (short backoff, no
+    anti-bot-avoidance reasoning needed) — confirmed live (2026-09-17) that
+    shopee_th's curl_cffi transport (routed through Bright Data's Web
+    Unlocker as a forward proxy in production) can hit a one-off HTTP 502
+    that succeeds again on the next attempt. Deliberately capped at 1 retry,
+    independent of CAPTCHA_MAX_RETRIES: also confirmed live the same day that
+    Web Unlocker's other documented failure mode — stalling up to
+    SCRAPE_TIMEOUT_SECONDS (~150s in production) before giving up, same as
+    fetch_pdp_via_unlocker_api's own timeout handling describes — turns into
+    a multi-minute hang that blows past Railway's own gateway timeout if
+    retried the full CAPTCHA_MAX_RETRIES budget (up to 4 attempts). One retry
+    bounds the worst case to ~2x the scrape timeout instead of ~4x.
     """
     scraper = get_scraper(site_key)
     last_error: Exception | None = None
+    scraper_error_retries_left = 1
 
     for attempt in range(settings.captcha_max_retries + 1):
         if settings.pre_scrape_jitter_ms_max > 0:
@@ -93,13 +98,13 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
             raise
         except ScraperError as exc:
             last_error = exc
-            if attempt == settings.captcha_max_retries:
+            if scraper_error_retries_left <= 0:
                 raise
+            scraper_error_retries_left -= 1
             # Short backoff — unlike CaptchaBlockedError above, this isn't
             # dodging a risk engine, just giving a transient network/proxy
-            # failure (e.g. a one-off HTTP 502) a moment before the next
-            # attempt's fresh proxy connection.
-            await asyncio.sleep(1 * (attempt + 1) + random.uniform(0, 1))
+            # failure (e.g. a one-off HTTP 502) a moment before the retry.
+            await asyncio.sleep(1 + random.uniform(0, 1))
 
     assert last_error is not None
     raise last_error
