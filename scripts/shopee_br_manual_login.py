@@ -44,6 +44,7 @@ from patchright.async_api import async_playwright  # noqa: E402
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError  # noqa: E402
 
 from app.config import settings  # noqa: E402
+from app.scrapers.browser_pool import _harden_profile_dir_permissions  # noqa: E402
 from app.scrapers.proxy_provider import get_proxy_provider  # noqa: E402
 from app.scrapers.sites.shopee_br import ShopeeBRScraper  # noqa: E402
 
@@ -101,6 +102,10 @@ async def _open_login_page(p):
 
 async def main() -> None:
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    # This directory is about to hold live, already-authenticated Shopee
+    # cookies — lock it down to the current OS user before anything gets
+    # written to it, same as browser_pool.py does on every app startup.
+    _harden_profile_dir_permissions(PROFILE_DIR)
     async with async_playwright() as p:
         context, page = await _open_login_page(p)
 
