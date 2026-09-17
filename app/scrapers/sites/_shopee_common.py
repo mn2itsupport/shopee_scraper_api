@@ -26,7 +26,7 @@ from playwright.async_api import BrowserContext, Route
 
 from app.config import settings
 from app.models.schemas import PDPData
-from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError
+from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError, accept_language_for
 from app.scrapers.captcha import get_captcha_solver, is_captcha_html, is_captcha_page, strip_script_and_style
 from app.scrapers.http_pool import get_client
 from app.scrapers.proxy_provider import get_proxy_provider
@@ -634,6 +634,16 @@ class ShopeeScraper(BaseScraper):
                 impersonate="chrome124",
                 proxies=proxies,
                 timeout=settings.scrape_timeout_seconds,
+                # impersonate="chrome124" already gives a matched, internally
+                # consistent User-Agent/sec-ch-ua/sec-ch-ua-platform bundle —
+                # but its Accept-Language default is a fixed "en-US,en;q=0.9"
+                # regardless of target country (confirmed live against a real
+                # echo endpoint), an easy giveaway for a Thai-locale site.
+                # Session-level headers apply to every request the session
+                # makes (including the warm-up GET above), and a plain header
+                # override here — unlike Playwright's locale option — isn't
+                # fought by anything lower-level (also confirmed live).
+                headers={"Accept-Language": accept_language_for(self.locale)},
                 # PROXY_MODE=brightdata_unlocker MITMs the TLS connection to
                 # inspect/unblock responses (see browser_pool.py's own
                 # ignore_https_errors=... for the same proxy mode) — it

@@ -5,6 +5,22 @@ from playwright.async_api import BrowserContext
 from app.models.schemas import PDPData
 
 
+def accept_language_for(locale: str) -> str:
+    """Real Chrome sends a quality-weighted fallback chain derived from the
+    OS's configured language list (e.g. "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7"),
+    never a bare locale tag on its own — a single-value Accept-Language is
+    itself a passive fingerprint. Shared by every transport that needs to
+    force a realistic header for a given site's locale: browser_pool.py
+    (Playwright's `locale` context option only ever produces the bare tag)
+    and _shopee_common.py's curl_cffi transport (its `impersonate=` profile
+    defaults to a fixed "en-US,en;q=0.9" regardless of target country).
+    """
+    lang = locale.split("-")[0]
+    if lang == "en":
+        return f"{locale},en;q=0.9"
+    return f"{locale},{lang};q=0.9,en-US;q=0.8,en;q=0.7"
+
+
 class ScraperError(Exception):
     """Raised for a failure that isn't a CAPTCHA/anti-bot wall (see CaptchaBlockedError)."""
 

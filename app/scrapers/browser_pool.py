@@ -7,7 +7,10 @@ requests wait their turn instead of spawning unbounded contexts.
 
 import asyncio
 import logging
+import os
 import random
+import subprocess
+import sys
 from pathlib import Path
 
 from patchright.async_api import Playwright as PatchrightDriver
@@ -17,6 +20,7 @@ from playwright_stealth import Stealth
 
 from app.config import settings
 from app.scrapers import http_pool, shopee_login
+from app.scrapers.base import accept_language_for
 from app.scrapers.proxy_provider import get_proxy_provider
 from app.scrapers.sites.shopee_br import ShopeeBRScraper
 from app.scrapers.sites.shopee_th import ShopeeTHScraper
@@ -43,11 +47,102 @@ logger = logging.getLogger(__name__)
 # rebuilding it per request.
 _stealth = Stealth()
 
-_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+
+def _harden_profile_dir_permissions(path: Path) -> None:
+    """Restrict a persistent browser profile directory (_SHOPEE_TH_PROFILE_DIR /
+    _SHOPEE_BR_PROFILE_DIR) to the current OS user only. It holds live,
+    already-authenticated Shopee session cookies — equivalent in sensitivity
+    to a credential — but by default (at least on Windows, confirmed via
+    `icacls`) a freshly-created directory inherits access for every
+    authenticated user on the machine, not just whoever runs this process.
+    Called on every startup (idempotent) rather than only right after
+    mkdir(), so an already-existing directory created before this existed
+    gets locked down too. Best-effort: failing here logs a warning but never
+    blocks startup — worst case is the same permissions the directory would
+    have had anyway.
+    """
+    try:
+        if sys.platform == "win32":
+            username = os.environ.get("USERNAME", "")
+            grants = ["SYSTEM:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]  # SYSTEM, BUILTIN\Administrators
+            if username:
+                grants.append(f"{username}:(OI)(CI)F")
+            subprocess.run(
+                ["icacls", str(path), "/inheritance:r", "/grant:r", *grants],
+                check=True,
+                capture_output=True,
+            )
+        else:
+            path.chmod(0o700)
+    except Exception:
+        logger.warning("Could not harden permissions on profile directory %s", path, exc_info=True)
+
+class _BrowserProfile:
+    """One internally-consistent desktop-Chrome identity: every field must
+    agree with every other, because that's exactly what anti-bot vendors
+    (DataDome/Akamai-style) diff against each other. Picking a User-Agent
+    string alone (the old _USER_AGENTS list) is not enough — Chromium
+    generates the sec-ch-ua* Client Hints headers itself from the real
+    bundled engine version and the real host OS, ignoring whatever
+    User-Agent override new_context() is given. So a spoofed UA claiming
+    Chrome/128 on macOS while the actual sec-ch-ua* headers say Chrome/131
+    on Windows is a much stronger tell than sending no UA override at all.
+    Forcing all four fields as one matched bundle via extra_http_headers
+    (below) closes that gap instead of leaving it to chance.
+    """
+
+    def __init__(self, user_agent: str, sec_ch_ua: str, sec_ch_ua_platform: str) -> None:
+        self.user_agent = user_agent
+        self.sec_ch_ua = sec_ch_ua
+        self.sec_ch_ua_platform = sec_ch_ua_platform
+
+
+# Chrome major version kept current with whatever playwright==<pinned version
+# in requirements.txt> actually bundles — check `python -c "import asyncio,
+# playwright.async_api as p; ..."` (or just the failure mode: a stale major
+# version here is a UA-vs-real-Chrome-release-date mismatch, a softer but
+# still checkable signal) and refresh this list when bumping playwright.
+_BROWSER_PROFILES = [
+    _BrowserProfile(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        sec_ch_ua='"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+        sec_ch_ua_platform='"Windows"',
+    ),
+    _BrowserProfile(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        sec_ch_ua='"Google Chrome";v="130", "Chromium";v="130", "Not_A Brand";v="99"',
+        sec_ch_ua_platform='"Windows"',
+    ),
+    _BrowserProfile(
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        sec_ch_ua='"Not_A Brand";v="24", "Chromium";v="131", "Google Chrome";v="131"',
+        sec_ch_ua_platform='"macOS"',
+    ),
+    _BrowserProfile(
+        user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        sec_ch_ua='"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+        sec_ch_ua_platform='"Linux"',
+    ),
 ]
+
+
+def _make_accept_language_router(locale: str):
+    """context.new_context(locale=...) regenerates a bare, unweighted
+    Accept-Language on every request at a lower level than extra_http_headers
+    (confirmed live: passing "Accept-Language" via extra_http_headers, or via
+    a later set_extra_http_headers() call, both get silently overwritten back
+    to the bare locale tag) — routing every request through this handler and
+    rewriting the header on its way out is the one thing that actually sticks
+    on the wire (confirmed against a real echo server).
+    """
+    accept_language = accept_language_for(locale)
+
+    async def _router(route) -> None:
+        headers = dict(route.request.headers)
+        headers["accept-language"] = accept_language
+        await route.continue_(headers=headers)
+
+    return _router
 
 _playwright: Playwright | None = None
 _browser: Browser | None = None
@@ -78,6 +173,16 @@ _shopee_br_context: BrowserContext | None = None
 _shopee_br_patchright_driver: PatchrightDriver | None = None
 _shopee_br_session_last_known_valid: bool | None = None
 _shopee_br_session_watchdog_task: asyncio.Task | None = None
+
+# Watches shopee_login._cached_storage_state instead of a persistent-profile
+# context — only started (in startup(), below) for a site whose login is
+# enabled but whose persistent profile is NOT in use, since ManagedContext
+# only ever reads the cached storage_state in that case (a site with an
+# active persistent context is already covered by the watchdogs above).
+# Keyed by site_key rather than one pair of globals per site, since
+# shopee_login.enabled_configs() can return an arbitrary set of sites.
+_cached_session_last_known_valid: dict[str, bool | None] = {}
+_cached_session_watchdog_tasks: dict[str, asyncio.Task] = {}
 
 
 async def _alert_session(site_key: str, webhook_url: str, message: str) -> None:
@@ -183,6 +288,48 @@ async def _shopee_br_session_watchdog() -> None:
             logger.warning("shopee_br periodic session check itself failed", exc_info=True)
 
 
+async def _check_cached_session(login_config: shopee_login.SiteLoginConfig, webhook_url: str, reason: str) -> None:
+    site_key = login_config.site_key
+    last_known_valid = _cached_session_last_known_valid.get(site_key)
+    session_valid = await shopee_login.check_cached_session_valid(_browser, login_config)
+
+    if session_valid is True:
+        logger.info("%s cached-session check (%s): valid", site_key, reason)
+    elif session_valid is False:
+        logger.warning(
+            "%s cached-session check (%s): no longer valid — restart the app to log in again "
+            "(login_and_cache_session reruns at startup)",
+            site_key,
+            reason,
+        )
+    else:
+        logger.warning(
+            "%s cached-session check (%s): inconclusive — the check itself was caught by Shopee's "
+            "traffic-verification wall (not necessarily a dead session)",
+            site_key,
+            reason,
+        )
+
+    if session_valid is False and last_known_valid is not False:
+        await _alert_session(site_key, webhook_url, "cached login session is no longer valid — restart the app to log in again")
+    elif session_valid is True and last_known_valid is False:
+        await _alert_session(site_key, webhook_url, "cached login session has recovered and is valid again")
+
+    _cached_session_last_known_valid[site_key] = session_valid if session_valid is not None else last_known_valid
+
+
+async def _cached_session_watchdog(
+    login_config: shopee_login.SiteLoginConfig, webhook_url: str, interval_minutes: int
+) -> None:
+    interval_seconds = interval_minutes * 60
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            await _check_cached_session(login_config, webhook_url, "periodic")
+        except Exception:
+            logger.warning("%s cached-session periodic check itself failed", login_config.site_key, exc_info=True)
+
+
 async def startup() -> None:
     global _playwright, _browser, _semaphore, _shopee_th_context, _shopee_th_session_last_known_valid
     global _shopee_th_session_watchdog_task, _shopee_th_patchright_driver
@@ -197,6 +344,7 @@ async def startup() -> None:
 
     if settings.shopee_th_use_persistent_profile:
         _SHOPEE_TH_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        _harden_profile_dir_permissions(_SHOPEE_TH_PROFILE_DIR)
         proxy = (
             get_proxy_provider().next_proxy(country=ShopeeTHScraper.unlocker_country)
             if settings.proxy_mode == "brightdata_residential"
@@ -255,6 +403,7 @@ async def startup() -> None:
         # shopee_th's own Patchright driver, since each launch_persistent_context
         # call needs a live driver for as long as its context stays open.
         _SHOPEE_BR_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        _harden_profile_dir_permissions(_SHOPEE_BR_PROFILE_DIR)
         proxy = (
             get_proxy_provider().next_proxy(country=ShopeeBRScraper.unlocker_country)
             if settings.proxy_mode == "brightdata_residential"
@@ -317,8 +466,40 @@ async def startup() -> None:
             if cdp_browser is not None:
                 await cdp_browser.close()
 
+        uses_persistent_profile = (login_config.site_key == "shopee_th" and _shopee_th_context is not None) or (
+            login_config.site_key == "shopee_br" and _shopee_br_context is not None
+        )
+        if uses_persistent_profile:
+            # This site's scrapes actually read from the persistent-profile
+            # context (see ManagedContext.__aenter__), not this cached
+            # storage_state — already covered by the watchdog above, so
+            # watching the cached copy too would just be a second, unused
+            # session to track.
+            continue
+
+        webhook_url = (
+            settings.shopee_th_session_alert_webhook_url
+            if login_config.site_key == "shopee_th"
+            else settings.shopee_br_session_alert_webhook_url
+        )
+        interval_minutes = (
+            settings.shopee_th_session_check_interval_minutes
+            if login_config.site_key == "shopee_th"
+            else settings.shopee_br_session_check_interval_minutes
+        )
+        await _check_cached_session(login_config, webhook_url, "startup")
+        _cached_session_watchdog_tasks[login_config.site_key] = asyncio.create_task(
+            _cached_session_watchdog(login_config, webhook_url, interval_minutes)
+        )
+
 
 async def shutdown() -> None:
+    for task in _cached_session_watchdog_tasks.values():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     if _shopee_th_session_watchdog_task is not None:
         _shopee_th_session_watchdog_task.cancel()
         try:
@@ -380,8 +561,9 @@ class ManagedContext:
                 self._context = await _browser.new_context(locale=self._locale, storage_state=storage_state)
             else:
                 proxy = get_proxy_provider().next_proxy(country=self._country)
+                profile = random.choice(_BROWSER_PROFILES)
                 self._context = await _browser.new_context(
-                    user_agent=random.choice(_USER_AGENTS),
+                    user_agent=profile.user_agent,
                     viewport={"width": 1366, "height": 768},
                     locale=self._locale,
                     timezone_id=self._timezone_id,
@@ -394,8 +576,22 @@ class ManagedContext:
                     # responses, so it presents its own certificate instead of
                     # the target site's — Chromium rejects that by default.
                     ignore_https_errors=settings.proxy_mode == "brightdata_unlocker",
+                    # Force sec-ch-ua*/platform instead of trusting
+                    # Chromium's own defaults — they come from the real
+                    # bundled engine + host OS regardless of the UA override
+                    # above (see _BrowserProfile's docstring). extra_http_headers
+                    # is enough for these three; Accept-Language is handled
+                    # separately below (locale= silently wins over an
+                    # Accept-Language passed here — confirmed live, see
+                    # accept_language_for's docstring in base.py).
+                    extra_http_headers={
+                        "sec-ch-ua": profile.sec_ch_ua,
+                        "sec-ch-ua-mobile": "?0",
+                        "sec-ch-ua-platform": profile.sec_ch_ua_platform,
+                    },
                 )
                 await _stealth.apply_stealth_async(self._context)
+                await self._context.route("**/*", _make_accept_language_router(self._locale))
             return self._context
         except Exception:
             _semaphore.release()
