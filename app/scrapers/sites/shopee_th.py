@@ -1,12 +1,16 @@
 """Shopee Thailand PDP adapter. Shared logic lives in _shopee_common.py — this
 file only pins the country-specific constants."""
 
+import asyncio
+import logging
 import re
 
 from app.config import settings
 from app.models.schemas import PDPData
 from app.scrapers.base import ScraperError
 from app.scrapers.sites._shopee_common import ShopeeScraper
+
+logger = logging.getLogger(__name__)
 
 # curl_cffi's embedded mfe-initial-data snapshot duplicates a handful of
 # item/model fields under their legacy pre-get_pc names (itemid/shopid/name/
@@ -60,6 +64,25 @@ _CURL_CFFI_LEGACY_DATA_KEYS = frozenset({"event_type"})
 # capture rather than a plain float.
 _XTRACTO_PRICE_FIELDS = ("price", "price_min", "price_max", "price_before_discount", "price_min_before_discount", "price_max_before_discount")
 _CDN_IMAGE_ID = re.compile(r"/file/([^/?#]+)")
+
+# Fields _fetch_price_patch_via_browser lifts off a live pdp/get_pc capture's
+# item object to patch onto curl_cffi's response — a subset of
+# _GET_PC_ITEM_KEY_ORDER, deliberately scoped to just what curl_cffi's own
+# transport can't see (price/stock/rating/sold), not the whole item, so a
+# successful probe only ever fills gaps rather than overwriting fields
+# curl_cffi already got right (title, images, description, ...). Already in
+# get_pc's native integer scale (price * 100000) — no rescaling needed here,
+# unlike _xtracto_record_to_get_pc_raw's actor-sourced values.
+_PRICE_PATCH_ITEM_FIELDS = (*_XTRACTO_PRICE_FIELDS, "stock", "historical_sold", "sold", "item_rating")
+
+
+def _apply_price_patch(raw: dict, patch: dict) -> dict:
+    data = raw.get("data")
+    item = data.get("item") if isinstance(data, dict) else None
+    if not isinstance(item, dict):
+        return raw
+    return {**raw, "data": {**data, "item": {**item, **patch}}}
+
 
 # item's own key sequence on a real live pdp/get_pc capture — confirmed
 # against a real shopee_th response (see ThaiResponse.txt). xtracto's own
@@ -274,5 +297,69 @@ class ShopeeTHScraper(ShopeeScraper):
         return pdp.model_copy(update={"raw": _xtracto_record_to_get_pc_raw(pdp.raw)})
 
     async def fetch_pdp_via_curl_cffi(self, url: str) -> PDPData:
-        pdp = await self._curl_cffi_fetch(url)
-        return pdp.model_copy(update={"raw": _dedupe_curl_cffi_legacy_keys(pdp.raw)})
+        patch: dict | None = None
+        if settings.shopee_th_price_probe_enabled:
+            pdp, patch = await asyncio.gather(
+                self._curl_cffi_fetch(url),
+                self._fetch_price_patch_via_browser(url),
+            )
+            if patch:
+                logger.info("shopee_th price probe recovered %d field(s) for %s", len(patch), url)
+            else:
+                logger.info("shopee_th price probe found no usable price data for %s", url)
+        else:
+            pdp = await self._curl_cffi_fetch(url)
+
+        raw = _dedupe_curl_cffi_legacy_keys(pdp.raw)
+        if not (patch and settings.shopee_th_price_probe_merge):
+            return pdp.model_copy(update={"raw": raw})
+
+        # Shadow mode off (shopee_th_price_probe_merge=True): patch the
+        # deduped item in place and recompute the same top-level fields
+        # _parse_api_body derives from a live capture, so PDPData.price/
+        # rating/sold_count actually reflect the probe's data instead of
+        # curl_cffi's nulls once this is trusted.
+        raw = _apply_price_patch(raw, patch)
+        item = raw["data"]["item"]
+        price_raw = item.get("price") or item.get("price_min")
+        price = price_raw / 100000 if isinstance(price_raw, (int, float)) else pdp.price
+        rating = (item.get("item_rating") or {}).get("rating_star") or pdp.rating
+        sold_count = item.get("historical_sold") or item.get("sold") or pdp.sold_count
+        return pdp.model_copy(update={"raw": raw, "price": price, "rating": rating, "sold_count": sold_count})
+
+    async def _fetch_price_patch_via_browser(self, url: str) -> dict | None:
+        """Best-effort side probe: opens the persistent-profile browser
+        context (the same one browser_mode_override="local" would use) and
+        intercepts the live pdp/get_pc XHR, concurrently with the curl_cffi
+        call above, purely to measure whether it can recover price/rating/
+        sold data curl_cffi's own transport can't see. Never raises — every
+        failure mode (anti-bot wall, decode error, our own timeout) is
+        logged and swallowed here so this stays pure enrichment, never a
+        dependency the main response can fail on. See
+        settings.shopee_th_price_probe_enabled/_timeout_seconds/_merge.
+
+        Imports browser_pool lazily: browser_pool imports ShopeeTHScraper at
+        module load time (to key its persistent-profile context off
+        site_key == "shopee_th"), so importing it back at this module's top
+        level would be circular.
+        """
+        from app.scrapers.browser_pool import acquire_context
+
+        try:
+            async with acquire_context(
+                self.site_key, self.locale, self.timezone_id, self.geolocation, self.unlocker_country
+            ) as context:
+                pdp = await asyncio.wait_for(
+                    self.fetch_pdp(context, url),
+                    timeout=settings.shopee_th_price_probe_timeout_seconds,
+                )
+        except Exception:
+            logger.info("shopee_th price probe failed for %s", url, exc_info=True)
+            return None
+
+        item = (pdp.raw.get("data") or {}).get("item")
+        if not isinstance(item, dict):
+            return None
+
+        patch = {k: item[k] for k in _PRICE_PATCH_ITEM_FIELDS if k in item and item[k] is not None}
+        return patch or None

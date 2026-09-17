@@ -212,6 +212,28 @@ class Settings(BaseSettings):
     # seeing it in the logs. Leave empty to rely on the log warning alone.
     shopee_th_session_alert_webhook_url: str = ""
 
+    # shopee_th's curl_cffi transport (the current production default, see
+    # SHOPEE_TH_BROWSER_MODE_OVERRIDE) never sees real price/rating/sold —
+    # those only ever come from the live pdp/get_pc XHR, which the browser
+    # transport's own live testing (see ShopeeTHScraper's class docstring)
+    # found risk-control-rejected on every transport tried, authenticated
+    # persistent-profile session included. This flag runs that browser-based
+    # capture as a best-effort side probe (via the same persistent profile),
+    # concurrently with the curl_cffi call, purely to measure how often it
+    # actually succeeds in production before trusting its output — see
+    # shopee_th_price_probe_merge below for the separate switch that decides
+    # whether a successful probe's fields actually reach the response.
+    shopee_th_price_probe_enabled: bool = True
+    # Kept well under scrape_timeout_seconds — this probe only needs one XHR,
+    # not a full DOM-fallback scrape, so a stuck/blocked attempt shouldn't
+    # hold up the curl_cffi response it runs alongside.
+    shopee_th_price_probe_timeout_seconds: int = 25
+    # Shadow mode: false means the probe still runs and logs its outcome
+    # (see ShopeeTHScraper.fetch_pdp_via_curl_cffi) but its fields are never
+    # merged into the response. Flip to true only after the shadow logs show
+    # a real-world success rate worth relying on.
+    shopee_th_price_probe_merge: bool = False
+
     # shopee_br's own persistent-profile setup, same mechanism as
     # shopee_th_use_persistent_profile above (browser_profiles/shopee_br/,
     # seeded via `python scripts/shopee_br_manual_login.py`) — tried after

@@ -276,6 +276,49 @@ def get_cached_storage_state(site_key: str) -> dict | None:
     return _cached_storage_state.get(site_key)
 
 
+async def check_cached_session_valid(
+    browser: Browser, config: SiteLoginConfig, timeout_ms: int = 20000
+) -> bool | None:
+    """Best-effort check of whether a cached-storage_state session (this
+    module's _cached_storage_state, populated by login_and_cache_session) is
+    still actually authenticated. Unlike check_persistent_profile_session_valid
+    there's no live BrowserContext to reuse — this spins up a short-lived one
+    seeded from the cached storage_state purely to run the check, then closes
+    it, leaving the real per-request contexts (browser_pool.py's
+    ManagedContext) untouched.
+
+    Returns True if logged in, False if there's no cached session yet or the
+    login form is still reachable (session is dead — the only way to refresh
+    it today is restarting the app, which reruns login_and_cache_session at
+    startup), or None if the check itself got caught by Shopee's own
+    traffic-verification wall (inconclusive).
+    """
+    storage_state = get_cached_storage_state(config.site_key)
+    if storage_state is None:
+        return False
+
+    context = await browser.new_context(locale=config.locale, storage_state=storage_state)
+    try:
+        page = await context.new_page()
+        try:
+            await page.goto(config.login_url, timeout=timeout_ms)
+            if "/verify/traffic/error" in page.url:
+                return None
+            try:
+                # Same signal check_persistent_profile_session_valid uses: an
+                # already-authenticated session gets redirected away from the
+                # login form before this resolves, so a timeout here (not the
+                # form appearing) is what "logged in" looks like.
+                await page.locator(_USERNAME_SELECTORS[0]).first.wait_for(state="visible", timeout=timeout_ms)
+                return False
+            except PlaywrightTimeoutError:
+                return True
+        finally:
+            await page.close()
+    finally:
+        await context.close()
+
+
 async def check_persistent_profile_session_valid(
     context: BrowserContext, login_url: str, timeout_ms: int = 20000
 ) -> bool | None:
