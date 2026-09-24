@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
@@ -9,6 +9,12 @@ from app.routers.dashboard_api import require_admin
 
 router = APIRouter(tags=["dashboard-pages"])
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+
+@router.get("/playground", response_class=HTMLResponse)
+def playground() -> FileResponse:
+    return FileResponse(STATIC_DIR / "playground.html")
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
