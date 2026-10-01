@@ -5,6 +5,8 @@ import asyncio
 import logging
 import re
 
+import httpx
+
 from app.config import settings
 from app.models.schemas import PDPData
 from app.scrapers.base import ScraperError
@@ -301,7 +303,7 @@ class ShopeeTHScraper(ShopeeScraper):
         if settings.shopee_th_price_probe_enabled:
             pdp, patch = await asyncio.gather(
                 self._curl_cffi_fetch(url),
-                self._fetch_price_patch_via_browser(url),
+                self._select_price_probe(url),
             )
             if patch:
                 logger.info("shopee_th price probe recovered %d field(s) for %s", len(patch), url)
@@ -326,6 +328,62 @@ class ShopeeTHScraper(ShopeeScraper):
         rating = (item.get("item_rating") or {}).get("rating_star") or pdp.rating
         sold_count = item.get("historical_sold") or item.get("sold") or pdp.sold_count
         return pdp.model_copy(update={"raw": raw, "price": price, "rating": rating, "sold_count": sold_count})
+
+    def _select_price_probe(self, url: str):
+        if settings.shopee_th_price_agent_url:
+            return self._fetch_price_patch_via_agent(url)
+        if settings.shopee_th_real_chrome_cdp_url:
+            return self._fetch_price_patch_via_real_chrome(url)
+        return self._fetch_price_patch_via_browser(url)
+
+    @staticmethod
+    def _patch_from_get_pc_body(body: dict, url: str) -> dict | None:
+        if body.get("error"):
+            logger.info("shopee_th get_pc error %s for %s", body.get("error"), url)
+            return None
+        item = (body.get("data") or {}).get("item")
+        if not isinstance(item, dict):
+            return None
+        patch = {k: item[k] for k in _PRICE_PATCH_ITEM_FIELDS if k in item and item[k] is not None}
+        return patch or None
+
+    async def _fetch_price_patch_via_agent(self, url: str) -> dict | None:
+        """Same contract as _fetch_price_patch_via_browser (a dict of
+        _PRICE_PATCH_ITEM_FIELDS, or None; never raises), but asks
+        scripts/price_agent.py — running next to a real, human-logged-in
+        Chrome — for the live pdp/get_pc body over HTTP. This is the path a
+        Railway deployment uses: the API never touches Chrome/CDP itself.
+        """
+        timeout_s = settings.shopee_th_price_probe_timeout_seconds
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s + 15) as client:
+                response = await client.get(
+                    f"{settings.shopee_th_price_agent_url.rstrip('/')}/price",
+                    params={"url": url},
+                    headers={"X-Agent-Token": settings.shopee_th_price_agent_token},
+                )
+            response.raise_for_status()
+            body = response.json()
+        except Exception:
+            logger.info("shopee_th price agent failed for %s", url, exc_info=True)
+            return None
+        return self._patch_from_get_pc_body(body, url)
+
+    async def _fetch_price_patch_via_real_chrome(self, url: str) -> dict | None:
+        """Same contract, but attaches to a real Chrome over CDP directly
+        (settings.shopee_th_real_chrome_cdp_url) — for running the API on the
+        same machine as that Chrome, no agent needed.
+        """
+        from app.scrapers.real_chrome import capture_get_pc
+
+        try:
+            body = await capture_get_pc(
+                settings.shopee_th_real_chrome_cdp_url, url, settings.shopee_th_price_probe_timeout_seconds
+            )
+        except Exception:
+            logger.info("shopee_th real-chrome price probe failed for %s", url, exc_info=True)
+            return None
+        return self._patch_from_get_pc_body(body, url)
 
     async def _fetch_price_patch_via_browser(self, url: str) -> dict | None:
         """Best-effort side probe: opens the persistent-profile browser
