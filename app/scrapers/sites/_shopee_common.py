@@ -16,6 +16,7 @@ best-effort extraction from the rendered page's meta tags.
 
 import asyncio
 import json
+import logging
 import re
 
 import certifi
@@ -27,9 +28,12 @@ from playwright.async_api import BrowserContext, Route
 from app.config import settings
 from app.models.schemas import PDPData
 from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError, accept_language_for
+from app.scrapers.human_behavior import simulate_human_browsing
 from app.scrapers.captcha import get_captcha_solver, is_captcha_html, is_captcha_page, strip_script_and_style
 from app.scrapers.http_pool import get_client
 from app.scrapers.proxy_provider import get_proxy_provider
+
+logger = logging.getLogger(__name__)
 
 # Shopee's own "dead/invalid item_id or shop_id" error code — confirmed
 # repeatedly against real dead URLs on shopee_vn (via _PDP_FETCH_ERROR below)
@@ -168,6 +172,11 @@ class ShopeeScraper(BaseScraper):
                         wait_until="domcontentloaded",
                     )
                     await self._require_no_captcha(page)
+                    if settings.shopee_human_behavior_enabled:
+                        # Move/scroll/pause like a real visitor landing on
+                        # the home page would, instead of an instant,
+                        # mouse-event-free jump to the product URL below.
+                        await simulate_human_browsing(page)
                     # Let the home page's own background scripts (fingerprint
                     # SDKs, anti-bot cookie issuance) finish rather than
                     # racing straight into the product navigation below.
@@ -185,11 +194,29 @@ class ShopeeScraper(BaseScraper):
 
             await self._require_no_captcha(page)
 
-            # Give the page's own XHR call a moment to land after navigation.
-            for _ in range(int(settings.scrape_timeout_seconds / 0.5)):
-                if "task" in captured:
-                    break
-                await asyncio.sleep(0.5)
+            # Move/scroll like a real visitor reading the product page would,
+            # concurrently with the wait below rather than adding extra
+            # latency on top of it — the PDP API call fires from the page's
+            # own JS regardless, so this only changes what the session looks
+            # like while that's in flight, not when it lands.
+            behavior_task = (
+                asyncio.ensure_future(simulate_human_browsing(page, hover_selector="img"))
+                if settings.shopee_human_behavior_enabled
+                else None
+            )
+            try:
+                # Give the page's own XHR call a moment to land after navigation.
+                for _ in range(int(settings.scrape_timeout_seconds / 0.5)):
+                    if "task" in captured:
+                        break
+                    await asyncio.sleep(0.5)
+            finally:
+                if behavior_task is not None and not behavior_task.done():
+                    behavior_task.cancel()
+                    try:
+                        await behavior_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
 
             await self._require_no_captcha(page)
 
@@ -277,8 +304,10 @@ class ShopeeScraper(BaseScraper):
         item_rating from them too, since those are the two fields this
         transport nulls out).
         """
-        if is_captcha_html(html):
-            raise CaptchaBlockedError("Shopee showed a verification/anti-bot wall")
+        captcha_reason = is_captcha_html(html, url)
+        if captcha_reason:
+            logger.warning("shopee_%s anti-bot wall on %s: %s", self.site_key, url, captcha_reason)
+            raise CaptchaBlockedError(f"Shopee showed a verification/anti-bot wall: {captcha_reason}")
 
         product = self._extract_ld_json_product(html)
         if product is not None:
@@ -823,11 +852,33 @@ class ShopeeScraper(BaseScraper):
         )
 
     async def _require_no_captcha(self, page) -> None:
-        if not await is_captcha_page(page):
+        reason = await is_captcha_page(page)
+        if not reason:
             return
+        logger.warning("shopee_%s anti-bot wall on %s: %s", self.site_key, page.url, reason)
+        await self._collect_captcha_sample_if_enabled(page)
         if await get_captcha_solver().solve(page):
             return
-        raise CaptchaBlockedError("Shopee showed a verification/anti-bot wall")
+        raise CaptchaBlockedError(f"Shopee showed a verification/anti-bot wall: {reason}")
+
+    async def _collect_captcha_sample_if_enabled(self, page) -> None:
+        """Best-effort raw-sample capture for training the webunlocker's
+        slide/rotation solvers on real captchas instead of only synthetic
+        data. Never allowed to affect the scrape outcome — any failure here
+        (disk, permissions, a detached page) is swallowed and logged, not
+        raised, since this path already sits right before we either retry
+        or fail closed with CaptchaBlockedError."""
+        if not settings.collect_captcha_samples:
+            return
+        try:
+            from scripts.captcha_data_collector import collect_captcha_sample
+
+            sample_dir = await collect_captcha_sample(
+                page, out_dir=settings.captcha_sample_dir, label=f"shopee_{self.site_key}"
+            )
+            logger.info("shopee_%s captcha sample saved to %s", self.site_key, sample_dir)
+        except Exception:
+            logger.exception("shopee_%s failed to save captcha sample (non-fatal)", self.site_key)
 
     def _parse_api_body(self, body: dict, url: str) -> PDPData:
         data = body.get("data") or {}

@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     # out to just add latency without actually changing Shopee's response.
     shopee_warm_up_home_page: bool = True
 
+    # ShopeeScraper.fetch_pdp() only: after each navigation (home-page
+    # warm-up and the product page itself), run a short randomized sequence
+    # of mouse movement/scrolling/pauses (app/scrapers/human_behavior.py)
+    # before reading any data out of the page — a script that navigates and
+    # reads the DOM instantly produces zero mouse events and a flat timing
+    # profile, which behavioral anti-bot scoring can key off independent of
+    # the fingerprint/TLS/proxy layer. Adds a few hundred ms to ~2s of
+    # latency per navigation; toggle off if that's not worth it for a given
+    # deployment.
+    shopee_human_behavior_enabled: bool = True
+
     # "local": launch Chromium in-process (default). "brightdata_cdp": connect
     # to Bright Data's Scraping Browser over CDP instead of launching locally —
     # it handles proxy rotation, fingerprinting, and CAPTCHA solving on Bright
@@ -233,6 +244,21 @@ class Settings(BaseSettings):
     # merged into the response. Flip to true only after the shadow logs show
     # a real-world success rate worth relying on.
     shopee_th_price_probe_merge: bool = False
+    # CDP endpoint of a real, human-logged-in Chrome (started via
+    # scripts/launch_real_chrome_th.ps1, e.g. "http://127.0.0.1:9222"). When
+    # set, the price probe reads pdp/get_pc from that Chrome instead of the
+    # automated persistent-profile browser, which Shopee's anti-bot layer
+    # invalidates on its first automated action (confirmed live 2026-09-29;
+    # a real Chrome session got price 4-5 THB for the same item). Empty =
+    # keep the old automated-browser probe.
+    shopee_th_real_chrome_cdp_url: str = ""
+    # Railway-side: base URL of scripts/price_agent.py (reached through a
+    # tunnel), e.g. "https://price-agent.example.com". When set it takes
+    # precedence over shopee_th_real_chrome_cdp_url — the API never talks to
+    # Chrome directly when deployed. The token is the shared secret both
+    # sides use (the agent checks it, the API sends it as X-Agent-Token).
+    shopee_th_price_agent_url: str = ""
+    shopee_th_price_agent_token: str = ""
 
     # shopee_br's own persistent-profile setup, same mechanism as
     # shopee_th_use_persistent_profile above (browser_profiles/shopee_br/,
@@ -267,6 +293,16 @@ class Settings(BaseSettings):
     # client that only wants pass-through results, or while iterating on an
     # adapter without piling up test rows.
     store_pdp_data: bool = True
+
+    # Whether every detected CAPTCHA/anti-bot wall also gets a raw sample
+    # saved (full-page screenshot + HTML + best-effort piece/slot element
+    # crops) via scripts/captcha_data_collector.py — passive real-world
+    # training data collection for the webunlocker's slide/rotation
+    # solvers, at effectively zero cost since detection already happens on
+    # this path. Best-effort and fire-and-forget: a failure here never
+    # blocks or fails the underlying scrape.
+    collect_captcha_samples: bool = True
+    captcha_sample_dir: str = "captcha_dataset"
 
     log_dir: str = "logs"
     log_file: str = "app.log"

@@ -9,12 +9,16 @@ site adapter before giving up.
 """
 
 import asyncio
+import logging
 import re
 from abc import ABC, abstractmethod
+from urllib.parse import parse_qs, urlparse
 
 from playwright.async_api import Page
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Known signatures Shopee (and similar anti-bot vendors) show instead of the real page.
 # Extend this list as new patterns are observed; it's intentionally simple text/URL matching,
@@ -29,10 +33,33 @@ _CAPTCHA_URL_FRAGMENTS = ["/verify", "/challenge"]
 _SCRIPT_OR_STYLE_TAG = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 
 
-async def is_captcha_page(page: Page) -> bool:
-    url = page.url.lower()
-    if any(fragment in url for fragment in _CAPTCHA_URL_FRAGMENTS):
-        return True
+def _classify_captcha_url(url: str) -> str | None:
+    """Returns a short, specific reason string for a captcha/anti-bot URL, or
+    None if the URL doesn't match. Distinguishes Shopee's own named "scene"
+    (e.g. scene=crawler_item, confirmed live 2026-09-20 on both shopee_th and
+    shopee_br — Shopee explicitly labeling the request as detected crawler
+    traffic) from a generic /verify or /challenge redirect, so server logs
+    say *what kind* of wall was hit instead of just "captcha", which is what
+    actually lets a block-rate trend be diagnosed later instead of
+    re-discovered by hand each time.
+    """
+    lowered = url.lower()
+    if not any(fragment in lowered for fragment in _CAPTCHA_URL_FRAGMENTS):
+        return None
+    scene = parse_qs(urlparse(url).query).get("scene", [None])[0]
+    path = urlparse(url).path
+    return f"anti-bot redirect to {path} (scene={scene})" if scene else f"anti-bot redirect to {path}"
+
+
+async def is_captcha_page(page: Page) -> str | None:
+    """Returns a short classification string if `page` looks like a captcha/
+    anti-bot wall, or None otherwise. (Any non-None/non-empty string is
+    truthy, so existing `if await is_captcha_page(page):`-style callers keep
+    working unchanged.)
+    """
+    reason = _classify_captcha_url(page.url)
+    if reason:
+        return reason
 
     try:
         # Visible text only — page.content() returns the raw HTML, which
@@ -44,9 +71,10 @@ async def is_captcha_page(page: Page) -> bool:
         # visitor would actually see rendered.
         text = (await page.inner_text("body")).lower()
     except Exception:
-        return False
+        return None
 
-    return any(signature in text for signature in _CAPTCHA_SIGNATURES)
+    matched = next((s for s in _CAPTCHA_SIGNATURES if s in text), None)
+    return f'page text matched captcha signature "{matched}"' if matched else None
 
 
 def strip_script_and_style(html: str) -> str:
@@ -60,13 +88,19 @@ def strip_script_and_style(html: str) -> str:
     return _SCRIPT_OR_STYLE_TAG.sub(" ", html)
 
 
-def is_captcha_html(html: str) -> bool:
-    """Same signature check as is_captcha_page, for callers that only have a
+def is_captcha_html(html: str, url: str = "") -> str | None:
+    """Same classification as is_captcha_page, for callers that only have a
     raw HTML string (no live Page) — e.g. the Web Unlocker REST API
-    transport.
+    transport. `url` is optional (defaults to no URL-based check) since some
+    callers only ever have the response body.
     """
+    if url:
+        reason = _classify_captcha_url(url)
+        if reason:
+            return reason
     text = strip_script_and_style(html).lower()
-    return any(signature in text for signature in _CAPTCHA_SIGNATURES)
+    matched = next((s for s in _CAPTCHA_SIGNATURES if s in text), None)
+    return f'page text matched captcha signature "{matched}"' if matched else None
 
 
 class CaptchaSolver(ABC):

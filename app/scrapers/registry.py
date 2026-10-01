@@ -15,6 +15,10 @@ from app.scrapers.sites.shopee_vn import ShopeeVNScraper
 
 # Adding a new site: implement BaseScraper in scrapers/sites/<site>.py, then
 # add one line here. Nothing else in the app needs to change.
+# See scrape_with_retries's brightdata_cdp branch below for why this must
+# stay comfortably under Bright Data's own ~120s CDP idle-session kill.
+_BRIGHTDATA_CDP_SAFE_TIMEOUT_SECONDS = 100
+
 SCRAPER_REGISTRY: dict[str, BaseScraper] = {
     "shopee_br": ShopeeBRScraper(),
     "shopee_th": ShopeeTHScraper(),
@@ -81,6 +85,28 @@ async def scrape_with_retries(site_key: str, url: str) -> PDPData:
             async with acquire_context(
                 scraper.site_key, scraper.locale, scraper.timezone_id, scraper.geolocation, scraper.unlocker_country
             ) as context:
+                if browser_mode == "brightdata_cdp":
+                    # Bright Data's Scraping Browser kills the whole CDP
+                    # session after ~120s with no command traffic (confirmed
+                    # live 2026-09-20: a stalled anti-bot wall left fetch_pdp
+                    # sitting in its network-capture wait loop — no CDP calls
+                    # sent — well past that mark, since settings.scrape_timeout_seconds
+                    # is 150s in production; the session then got killed out
+                    # from under us before our own timeout ever fired, and
+                    # ManagedContext.__aexit__'s context.close() blew up with
+                    # a raw TargetClosedError instead of this loop seeing a
+                    # clean, retryable CaptchaBlockedError). Bounding this
+                    # path to comfortably under 120s — rather than trusting
+                    # scrape_timeout_seconds — ensures our own timeout always
+                    # wins that race.
+                    try:
+                        return await asyncio.wait_for(scraper.fetch_pdp(context, url), timeout=_BRIGHTDATA_CDP_SAFE_TIMEOUT_SECONDS)
+                    except asyncio.TimeoutError as exc:
+                        raise CaptchaBlockedError(
+                            f"fetch_pdp exceeded {_BRIGHTDATA_CDP_SAFE_TIMEOUT_SECONDS}s — Bright Data's "
+                            "Scraping Browser kills idle CDP sessions at ~120s, so this is treated as the "
+                            "same anti-bot wall stall rather than a raw connection failure"
+                        ) from exc
                 return await scraper.fetch_pdp(context, url)
         except CaptchaBlockedError as exc:
             last_error = exc

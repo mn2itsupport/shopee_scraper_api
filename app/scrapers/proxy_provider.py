@@ -95,7 +95,8 @@ class BrightDataUnlockerProxyProvider(ProxyProvider):
         self._password = password
 
     def next_proxy(self, country: str = "") -> dict:
-        return {"server": self._SERVER, "username": self._username, "password": self._password}
+        username = f"{self._username}-country-{country}" if country else self._username
+        return {"server": self._SERVER, "username": username, "password": self._password}
 
 
 class BrightDataResidentialProxyProvider(ProxyProvider):

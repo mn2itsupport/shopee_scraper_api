@@ -599,7 +599,17 @@ class ManagedContext:
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._context:
-            await self._context.close()
+            try:
+                await self._context.close()
+            except Exception:
+                # Best-effort cleanup only: a context whose underlying
+                # session already died server-side (e.g. Bright Data's
+                # Scraping Browser killing an idle CDP connection — see
+                # registry.py's brightdata_cdp branch) raises here on close()
+                # even though there's nothing left to clean up. Letting that
+                # escape would mask whatever real exception (or successful
+                # result) the `async with` body already produced.
+                logger.warning("Error closing browser context for %s (already dead?)", self._site_key, exc_info=True)
         _semaphore.release()
 
 
