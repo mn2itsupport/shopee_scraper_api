@@ -14,6 +14,9 @@ from app.scrapers.sites._shopee_common import ShopeeScraper, _normalize_shopee_u
 
 logger = logging.getLogger(__name__)
 
+# Serializes calls to the price agent (see _fetch_get_pc_via_agent).
+_AGENT_QUEUE = asyncio.Semaphore(1)
+
 # curl_cffi's embedded mfe-initial-data snapshot duplicates a handful of
 # item/model fields under their legacy pre-get_pc names (itemid/shopid/name/
 # images/cod_flag, models[].itemid/modelid/promotionid) alongside the
@@ -304,20 +307,28 @@ class ShopeeTHScraper(ShopeeScraper):
         url = _normalize_shopee_url(url)
         patch: dict | None = None
         if settings.shopee_th_price_probe_enabled:
-            # return_exceptions: a curl_cffi failure must not discard a probe
-            # body that may be good enough to answer the request on its own.
-            pdp, body = await asyncio.gather(
-                self._curl_cffi_fetch(url),
-                self._select_price_probe(url),
-                return_exceptions=True,
-            )
-            patch = self._patch_from_get_pc_body(body, url) if body else None
-            if patch:
-                logger.info("shopee_th price probe recovered %d field(s) for %s", len(patch), url)
-            else:
-                logger.info("shopee_th price probe found no usable price data for %s", url)
-            if isinstance(pdp, BaseException):
-                return self._fall_back_to_probe_body(pdp, body, patch, url)
+            probe_task = asyncio.ensure_future(self._select_price_probe(url))
+            try:
+                try:
+                    pdp = await self._curl_cffi_fetch(url)
+                except Exception as exc:
+                    # Wait for the probe however long it's queued (the price
+                    # agent serves one product at a time) — it may be good
+                    # enough to answer the request on its own. The route's
+                    # SCRAPE_TOTAL_TIMEOUT_SECONDS still bounds the wait.
+                    body = await probe_task
+                    patch = self._log_probe_outcome(body, url)
+                    return self._fall_back_to_probe_body(exc, body, patch, url)
+                if not settings.shopee_th_price_probe_merge and not probe_task.done():
+                    # Shadow mode would only log it; don't hold a good
+                    # curl_cffi response hostage to the agent's queue.
+                    logger.info("shopee_th price probe skipped (still queued/running) for %s", url)
+                    return pdp.model_copy(update={"raw": _dedupe_curl_cffi_legacy_keys(pdp.raw)})
+                patch = self._log_probe_outcome(await probe_task, url)
+            finally:
+                # Also on cancellation (total timeout, client gone): free the
+                # agent queue slot instead of fetching for nobody.
+                probe_task.cancel()
         else:
             pdp = await self._curl_cffi_fetch(url)
 
@@ -337,6 +348,14 @@ class ShopeeTHScraper(ShopeeScraper):
         rating = (item.get("item_rating") or {}).get("rating_star") or pdp.rating
         sold_count = item.get("historical_sold") or item.get("sold") or pdp.sold_count
         return pdp.model_copy(update={"raw": raw, "price": price, "rating": rating, "sold_count": sold_count})
+
+    def _log_probe_outcome(self, body: dict | None, url: str) -> dict | None:
+        patch = self._patch_from_get_pc_body(body, url) if body else None
+        if patch:
+            logger.info("shopee_th price probe recovered %d field(s) for %s", len(patch), url)
+        else:
+            logger.info("shopee_th price probe found no usable price data for %s", url)
+        return patch
 
     def _fall_back_to_probe_body(
         self, error: BaseException, body: dict | None, patch: dict | None, url: str
@@ -388,18 +407,22 @@ class ShopeeTHScraper(ShopeeScraper):
         Railway deployment uses: the API never touches Chrome/CDP itself.
         """
         timeout_s = settings.shopee_th_price_probe_timeout_seconds
-        try:
-            async with httpx.AsyncClient(timeout=timeout_s + 15) as client:
-                response = await client.get(
-                    f"{settings.shopee_th_price_agent_url.rstrip('/')}/price",
-                    params={"url": url},
-                    headers={"X-Agent-Token": settings.shopee_th_price_agent_token},
-                )
-            response.raise_for_status()
-            return response.json()
-        except Exception:
-            logger.info("shopee_th price agent failed for %s", url, exc_info=True)
-            return None
+        # Queue here, one call at a time, matching the agent (one Chrome tab
+        # at a time): the HTTP timeout then covers only the agent's own work,
+        # not time spent behind other requests in a burst.
+        async with _AGENT_QUEUE:
+            try:
+                async with httpx.AsyncClient(timeout=timeout_s + 15) as client:
+                    response = await client.get(
+                        f"{settings.shopee_th_price_agent_url.rstrip('/')}/price",
+                        params={"url": url},
+                        headers={"X-Agent-Token": settings.shopee_th_price_agent_token},
+                    )
+                response.raise_for_status()
+                return response.json()
+            except Exception:
+                logger.info("shopee_th price agent failed for %s", url, exc_info=True)
+                return None
 
     async def _fetch_get_pc_via_real_chrome(self, url: str) -> dict | None:
         """Same contract, but attaches to a real Chrome over CDP directly

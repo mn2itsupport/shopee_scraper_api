@@ -4,6 +4,7 @@ both mocked, so this tests the control flow only. No test here talks to
 Shopee, Bright Data, or a real price agent.
 """
 
+import asyncio
 import os
 from unittest.mock import AsyncMock
 
@@ -15,6 +16,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
 from app.config import settings  # noqa: E402
 from app.models.schemas import PDPData  # noqa: E402
 from app.scrapers.base import ScraperError  # noqa: E402
+from app.scrapers.sites import shopee_th  # noqa: E402
 from app.scrapers.sites.shopee_th import ShopeeTHScraper  # noqa: E402
 
 URL = "https://shopee.co.th/product-i.481607585.11168850119"
@@ -166,3 +168,115 @@ async def test_curl_success_merges_probe_price_when_merge_on(scraper, monkeypatc
     assert result.title == "curl title"
     assert result.price == 4.0
     assert result.rating == 4.8
+
+
+def _slow_probe(body, delay, events):
+    async def probe():
+        try:
+            await asyncio.sleep(delay)
+            events.append("probe finished")
+            return body
+        except asyncio.CancelledError:
+            events.append("probe cancelled")
+            raise
+
+    return lambda url: probe()
+
+
+@pytest.mark.asyncio
+async def test_curl_failure_waits_for_queued_probe(scraper, monkeypatch):
+    events = []
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(side_effect=ScraperError("HTTP 502")))
+    monkeypatch.setattr(scraper, "_select_price_probe", _slow_probe(GET_PC_BODY, 0.2, events))
+
+    result = await scraper.fetch_pdp_via_curl_cffi(URL)
+
+    assert result.title == "probe title"
+    assert events == ["probe finished"]
+
+
+@pytest.mark.asyncio
+async def test_curl_success_skips_queued_probe_in_shadow_mode(scraper, monkeypatch):
+    events = []
+    curl_pdp = PDPData(site_key="shopee_th", product_url=URL, title="curl title", raw={"data": {"item": {}}})
+
+    async def curl(url):
+        await asyncio.sleep(0.05)  # long enough for the probe to start waiting
+        return curl_pdp
+
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", curl)
+    monkeypatch.setattr(scraper, "_select_price_probe", _slow_probe(GET_PC_BODY, 5, events))
+
+    result = await asyncio.wait_for(scraper.fetch_pdp_via_curl_cffi(URL), timeout=1)
+    await asyncio.sleep(0)
+
+    assert result.title == "curl title"
+    assert events == ["probe cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_curl_success_waits_for_probe_when_merge_on(scraper, monkeypatch):
+    monkeypatch.setattr(settings, "shopee_th_price_probe_merge", True)
+    events = []
+    curl_pdp = PDPData(site_key="shopee_th", product_url=URL, title="curl title", raw={"data": {"item": {}}})
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(return_value=curl_pdp))
+    monkeypatch.setattr(scraper, "_select_price_probe", _slow_probe(GET_PC_BODY, 0.2, events))
+
+    result = await scraper.fetch_pdp_via_curl_cffi(URL)
+
+    assert result.price == 4.0
+    assert events == ["probe finished"]
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_cancels_queued_probe(scraper, monkeypatch):
+    events = []
+
+    async def slow_curl(url):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", slow_curl)
+    monkeypatch.setattr(scraper, "_select_price_probe", _slow_probe(GET_PC_BODY, 5, events))
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(scraper.fetch_pdp_via_curl_cffi(URL), timeout=0.2)
+    await asyncio.sleep(0)
+
+    assert events == ["probe cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_agent_calls_run_one_at_a_time(scraper, monkeypatch):
+    monkeypatch.setattr(settings, "shopee_th_price_agent_url", "https://agent.invalid")
+    state = {"active": 0, "max_active": 0}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return GET_PC_BODY
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, *args, **kwargs):
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            await asyncio.sleep(0.05)
+            state["active"] -= 1
+            return FakeResponse()
+
+    monkeypatch.setattr(shopee_th.httpx, "AsyncClient", FakeClient)
+
+    bodies = await asyncio.gather(*(scraper._fetch_get_pc_via_agent(URL) for _ in range(5)))
+
+    assert bodies == [GET_PC_BODY] * 5
+    assert state["max_active"] == 1
