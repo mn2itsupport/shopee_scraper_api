@@ -324,7 +324,17 @@ class ShopeeTHScraper(ShopeeScraper):
                     # curl_cffi response hostage to the agent's queue.
                     logger.info("shopee_th price probe skipped (still queued/running) for %s", url)
                     return pdp.model_copy(update={"raw": _dedupe_curl_cffi_legacy_keys(pdp.raw)})
-                patch = self._log_probe_outcome(await probe_task, url)
+                try:
+                    body = await asyncio.wait_for(
+                        probe_task, timeout=settings.shopee_th_price_probe_merge_wait_seconds
+                    )
+                except asyncio.TimeoutError:
+                    # Deep in a burst the agent queue can outlast the route's
+                    # total timeout, which would throw away this good
+                    # curl_cffi response too — return it without the price.
+                    logger.info("shopee_th price probe not back in time; answering without it for %s", url)
+                    return pdp.model_copy(update={"raw": _dedupe_curl_cffi_legacy_keys(pdp.raw)})
+                patch = self._log_probe_outcome(body, url)
             finally:
                 # Also on cancellation (total timeout, client gone): free the
                 # agent queue slot instead of fetching for nobody.

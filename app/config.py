@@ -255,6 +255,10 @@ class Settings(BaseSettings):
     # merged into the response. Flip to true only after the shadow logs show
     # a real-world success rate worth relying on.
     shopee_th_price_probe_merge: bool = False
+    # With merge on, how long a successful curl_cffi response waits for the
+    # probe (the price agent queues requests one at a time) before being
+    # returned without the probe's price.
+    shopee_th_price_probe_merge_wait_seconds: int = 60
     # When curl_cffi itself fails (e.g. Bright Data's unlocker erroring), answer
     # from the probe's pdp/get_pc body instead of failing the request — only
     # if the probe actually returned a real item. Independent of _merge above.

@@ -280,3 +280,20 @@ async def test_agent_calls_run_one_at_a_time(scraper, monkeypatch):
 
     assert bodies == [GET_PC_BODY] * 5
     assert state["max_active"] == 1
+
+
+@pytest.mark.asyncio
+async def test_merge_on_returns_without_price_when_probe_too_slow(scraper, monkeypatch):
+    monkeypatch.setattr(settings, "shopee_th_price_probe_merge", True)
+    monkeypatch.setattr(settings, "shopee_th_price_probe_merge_wait_seconds", 0.1)
+    events = []
+    curl_pdp = PDPData(site_key="shopee_th", product_url=URL, title="curl title", raw={"data": {"item": {}}})
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(return_value=curl_pdp))
+    monkeypatch.setattr(scraper, "_select_price_probe", _slow_probe(GET_PC_BODY, 5, events))
+
+    result = await asyncio.wait_for(scraper.fetch_pdp_via_curl_cffi(URL), timeout=1)
+    await asyncio.sleep(0)
+
+    assert result.title == "curl title"
+    assert result.price is None
+    assert events == ["probe cancelled"]
