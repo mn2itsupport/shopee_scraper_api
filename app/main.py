@@ -20,6 +20,8 @@ from app.scrapers import browser_pool, http_pool
 # by default, so INFO logs are silently dropped and WARNING+ only reach
 # Python's unformatted "handler of last resort". Configure the root logger
 # so app logs show up both in the server output and on disk.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 os.makedirs(settings.log_dir, exist_ok=True)
 _log_format = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
 
