@@ -43,6 +43,9 @@ if [ "${SELF_HOSTED_CHROME:-false}" = "true" ]; then
 
     # Restart Chrome if it ever exits, so one crash doesn't take the price
     # probe down until the next redeploy.
+    # --disable-namespace-sandbox: Railway containers don't allow user
+    # namespaces (Chrome aborts in credentials.cc), so use the setuid
+    # chrome-sandbox helper instead — still sandboxed, unlike --no-sandbox.
     (
         while true; do
             runuser -u pwuser -- env DISPLAY=:99 TZ=Asia/Bangkok LANG=th_TH.UTF-8 \
@@ -53,6 +56,7 @@ if [ "${SELF_HOSTED_CHROME:-false}" = "true" ]; then
                 --no-first-run \
                 --no-default-browser-check \
                 --disable-dev-shm-usage \
+                --disable-namespace-sandbox \
                 --window-size=1366,768 \
                 --lang=th-TH \
                 "${proxy_args[@]}" \
