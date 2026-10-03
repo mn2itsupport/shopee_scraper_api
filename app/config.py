@@ -255,6 +255,10 @@ class Settings(BaseSettings):
     # merged into the response. Flip to true only after the shadow logs show
     # a real-world success rate worth relying on.
     shopee_th_price_probe_merge: bool = False
+    # When curl_cffi itself fails (e.g. Bright Data's unlocker erroring), answer
+    # from the probe's pdp/get_pc body instead of failing the request — only
+    # if the probe actually returned a real item. Independent of _merge above.
+    shopee_th_price_probe_fallback: bool = True
     # CDP endpoint of a real, human-logged-in Chrome (started via
     # scripts/launch_real_chrome_th.ps1, e.g. "http://127.0.0.1:9222"). When
     # set, the price probe reads pdp/get_pc from that Chrome instead of the

@@ -10,7 +10,7 @@ import httpx
 from app.config import settings
 from app.models.schemas import PDPData
 from app.scrapers.base import ScraperError
-from app.scrapers.sites._shopee_common import ShopeeScraper
+from app.scrapers.sites._shopee_common import ShopeeScraper, _normalize_shopee_url
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ _CURL_CFFI_LEGACY_DATA_KEYS = frozenset({"event_type"})
 _XTRACTO_PRICE_FIELDS = ("price", "price_min", "price_max", "price_before_discount", "price_min_before_discount", "price_max_before_discount")
 _CDN_IMAGE_ID = re.compile(r"/file/([^/?#]+)")
 
-# Fields _fetch_price_patch_via_browser lifts off a live pdp/get_pc capture's
+# Fields _patch_from_get_pc_body lifts off a live pdp/get_pc capture's
 # item object to patch onto curl_cffi's response — a subset of
 # _GET_PC_ITEM_KEY_ORDER, deliberately scoped to just what curl_cffi's own
 # transport can't see (price/stock/rating/sold), not the whole item, so a
@@ -301,14 +301,20 @@ class ShopeeTHScraper(ShopeeScraper):
     async def fetch_pdp_via_curl_cffi(self, url: str) -> PDPData:
         patch: dict | None = None
         if settings.shopee_th_price_probe_enabled:
-            pdp, patch = await asyncio.gather(
+            # return_exceptions: a curl_cffi failure must not discard a probe
+            # body that may be good enough to answer the request on its own.
+            pdp, body = await asyncio.gather(
                 self._curl_cffi_fetch(url),
                 self._select_price_probe(url),
+                return_exceptions=True,
             )
+            patch = self._patch_from_get_pc_body(body, url) if body else None
             if patch:
                 logger.info("shopee_th price probe recovered %d field(s) for %s", len(patch), url)
             else:
                 logger.info("shopee_th price probe found no usable price data for %s", url)
+            if isinstance(pdp, BaseException):
+                return self._fall_back_to_probe_body(pdp, body, patch, url)
         else:
             pdp = await self._curl_cffi_fetch(url)
 
@@ -329,15 +335,39 @@ class ShopeeTHScraper(ShopeeScraper):
         sold_count = item.get("historical_sold") or item.get("sold") or pdp.sold_count
         return pdp.model_copy(update={"raw": raw, "price": price, "rating": rating, "sold_count": sold_count})
 
+    def _fall_back_to_probe_body(
+        self, error: BaseException, body: dict | None, patch: dict | None, url: str
+    ) -> PDPData:
+        """curl_cffi failed (e.g. Bright Data's unlocker returning 502s):
+        answer from the probe's live pdp/get_pc body instead, if it has a
+        real item — it's the same envelope _parse_api_body reads from a live
+        browser capture, so it carries title/images as well as price/rating/
+        sold. Independent of shopee_th_price_probe_merge: that switch guards
+        mixing probe fields into a working curl_cffi response, whereas here
+        the alternative is failing the request. Re-raises curl_cffi's own
+        error when there's nothing usable to fall back to.
+        """
+        if not (settings.shopee_th_price_probe_fallback and patch):
+            raise error
+        logger.warning(
+            "shopee_th curl_cffi failed (%s: %s); answering from the price probe's get_pc body for %s",
+            type(error).__name__,
+            error,
+            url,
+        )
+        return self._parse_api_body(body, _normalize_shopee_url(url))
+
     def _select_price_probe(self, url: str):
         if settings.shopee_th_price_agent_url:
-            return self._fetch_price_patch_via_agent(url)
+            return self._fetch_get_pc_via_agent(url)
         if settings.shopee_th_real_chrome_cdp_url:
-            return self._fetch_price_patch_via_real_chrome(url)
-        return self._fetch_price_patch_via_browser(url)
+            return self._fetch_get_pc_via_real_chrome(url)
+        return self._fetch_get_pc_via_browser(url)
 
     @staticmethod
     def _patch_from_get_pc_body(body: dict, url: str) -> dict | None:
+        if not isinstance(body, dict):
+            return None
         if body.get("error"):
             logger.info("shopee_th get_pc error %s for %s", body.get("error"), url)
             return None
@@ -347,9 +377,9 @@ class ShopeeTHScraper(ShopeeScraper):
         patch = {k: item[k] for k in _PRICE_PATCH_ITEM_FIELDS if k in item and item[k] is not None}
         return patch or None
 
-    async def _fetch_price_patch_via_agent(self, url: str) -> dict | None:
-        """Same contract as _fetch_price_patch_via_browser (a dict of
-        _PRICE_PATCH_ITEM_FIELDS, or None; never raises), but asks
+    async def _fetch_get_pc_via_agent(self, url: str) -> dict | None:
+        """Same contract as _fetch_get_pc_via_browser (the pdp/get_pc body,
+        or None; never raises), but asks
         scripts/price_agent.py — running next to a real, human-logged-in
         Chrome — for the live pdp/get_pc body over HTTP. This is the path a
         Railway deployment uses: the API never touches Chrome/CDP itself.
@@ -363,13 +393,12 @@ class ShopeeTHScraper(ShopeeScraper):
                     headers={"X-Agent-Token": settings.shopee_th_price_agent_token},
                 )
             response.raise_for_status()
-            body = response.json()
+            return response.json()
         except Exception:
             logger.info("shopee_th price agent failed for %s", url, exc_info=True)
             return None
-        return self._patch_from_get_pc_body(body, url)
 
-    async def _fetch_price_patch_via_real_chrome(self, url: str) -> dict | None:
+    async def _fetch_get_pc_via_real_chrome(self, url: str) -> dict | None:
         """Same contract, but attaches to a real Chrome over CDP directly
         (settings.shopee_th_real_chrome_cdp_url) — for running the API on the
         same machine as that Chrome, no agent needed.
@@ -377,15 +406,14 @@ class ShopeeTHScraper(ShopeeScraper):
         from app.scrapers.real_chrome import capture_get_pc
 
         try:
-            body = await capture_get_pc(
+            return await capture_get_pc(
                 settings.shopee_th_real_chrome_cdp_url, url, settings.shopee_th_price_probe_timeout_seconds
             )
         except Exception:
             logger.info("shopee_th real-chrome price probe failed for %s", url, exc_info=True)
             return None
-        return self._patch_from_get_pc_body(body, url)
 
-    async def _fetch_price_patch_via_browser(self, url: str) -> dict | None:
+    async def _fetch_get_pc_via_browser(self, url: str) -> dict | None:
         """Best-effort side probe: opens the persistent-profile browser
         context (the same one browser_mode_override="local" would use) and
         intercepts the live pdp/get_pc XHR, concurrently with the curl_cffi
@@ -414,10 +442,4 @@ class ShopeeTHScraper(ShopeeScraper):
         except Exception:
             logger.info("shopee_th price probe failed for %s", url, exc_info=True)
             return None
-
-        item = (pdp.raw.get("data") or {}).get("item")
-        if not isinstance(item, dict):
-            return None
-
-        patch = {k: item[k] for k in _PRICE_PATCH_ITEM_FIELDS if k in item and item[k] is not None}
-        return patch or None
+        return pdp.raw

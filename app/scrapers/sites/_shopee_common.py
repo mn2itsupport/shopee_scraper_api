@@ -915,9 +915,15 @@ class ShopeeScraper(BaseScraper):
         price_raw = item.get("price") or item.get("price_min")
         price = price_raw / 100000 if isinstance(price_raw, (int, float)) else None
 
+        # Newer get_pc bodies (seen on shopee_th, 2026-10) moved these off
+        # item: title is item.title instead of item.name, the gallery lives in
+        # data.product_images.images, and sold counts in data.product_review.
+        # Older shapes still win when present.
+        product_images = data.get("product_images") if isinstance(data.get("product_images"), dict) else {}
+        product_review = data.get("product_review") if isinstance(data.get("product_review"), dict) else {}
         images = [
             f"https://cf.{self.base_domain}/file/{img}"
-            for img in item.get("images", [])
+            for img in (item.get("images") or product_images.get("images") or [])
             if isinstance(img, str)
         ]
 
@@ -943,11 +949,11 @@ class ShopeeScraper(BaseScraper):
             site_key=self.site_key,
             product_url=url,
             external_product_id=external_id,
-            title=item.get("name"),
+            title=item.get("name") or item.get("title"),
             price=price,
             currency=item.get("currency", self.default_currency),
-            rating=(item.get("item_rating") or {}).get("rating_star"),
-            sold_count=item.get("historical_sold") or item.get("sold"),
+            rating=(item.get("item_rating") or {}).get("rating_star") or product_review.get("rating_star"),
+            sold_count=item.get("historical_sold") or item.get("sold") or product_review.get("historical_sold"),
             image_urls=images,
             raw=raw,
         )
