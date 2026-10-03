@@ -12,9 +12,6 @@
 #                           — a STICKY Thai residential session; Chrome can't take
 #                           proxy credentials on the command line, so gost forwards
 #                           127.0.0.1:3128 to it and adds the auth.
-#   VNC_PASSWORD            optional; when set, x11vnc serves the Chrome screen on
-#                           port 5900 for the one-time manual Shopee login. Unset it
-#                           again once logged in.
 set -euo pipefail
 
 if [ "${SELF_HOSTED_CHROME:-false}" = "true" ]; then
@@ -34,11 +31,6 @@ if [ "${SELF_HOSTED_CHROME:-false}" = "true" ]; then
     if [ -n "${CHROME_UPSTREAM_PROXY:-}" ]; then
         gost -L "http://127.0.0.1:3128" -F "$CHROME_UPSTREAM_PROXY" &
         proxy_args=(--proxy-server=http://127.0.0.1:3128)
-    fi
-
-    if [ -n "${VNC_PASSWORD:-}" ]; then
-        x11vnc -storepasswd "$VNC_PASSWORD" /tmp/vncpass >/dev/null
-        x11vnc -display :99 -rfbport 5900 -rfbauth /tmp/vncpass -forever -shared -quiet &
     fi
 
     # Restart Chrome if it ever exits, so one crash doesn't take the price

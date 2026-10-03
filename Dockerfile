@@ -11,14 +11,14 @@ WORKDIR /app
 # Self-hosted real Chrome for shopee_th's price probe (only started when
 # SELF_HOSTED_CHROME=true — see scripts/start_railway.sh): Google Chrome
 # Stable rather than the bundled Chromium, Xvfb so it can run headed with no
-# real display, x11vnc for the one-time manual login, Thai fonts so pages
-# render like a real Thai user's, and gost to put proxy credentials in front
-# of Chrome (which can't take them on its command line).
+# real display, Thai fonts so pages render like a real Thai user's, and gost
+# to put proxy credentials in front of Chrome (which can't take them on its
+# command line).
 # noninteractive: these packages pull in tzdata, whose time zone prompt
 # otherwise hangs the build forever. ARG, not ENV, so it's build-time only.
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends wget gnupg xvfb x11vnc fonts-thai-tlwg \
+    && apt-get install -y --no-install-recommends wget gnupg xvfb fonts-thai-tlwg \
     && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
         > /etc/apt/sources.list.d/google-chrome.list \
