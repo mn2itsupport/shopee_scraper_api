@@ -1,0 +1,31 @@
+{% extends "web/base.html" %}
+{% from "web/macros.html" import logo_mark, icon %}
+{% block title %}{% block page_title %}{% endblock %} · {{ product_name }}{% endblock %}
+{% block body %}
+<div class="app">
+  <aside class="side">
+    <a class="brand" href="/app">
+      <span class="brand-mark">{{ logo_mark() }}</span>
+      <span class="brand-name">{{ product_name }}</span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="/app" class="{{ 'active' if active == 'overview' }}"{% if active == 'overview' %} aria-current="page"{% endif %}>{{ icon("overview") }}Overview</a>
+      <a href="/app/playground" class="{{ 'active' if active == 'playground' }}"{% if active == 'playground' %} aria-current="page"{% endif %}>{{ icon("playground") }}Playground</a>
+      <a href="/app/keys" class="{{ 'active' if active == 'keys' }}"{% if active == 'keys' %} aria-current="page"{% endif %}>{{ icon("keys") }}Keys &amp; plan</a>
+      <span class="soon">{{ icon("jobs") }}Jobs &amp; webhooks<small>Soon</small></span>
+    </nav>
+    <div class="side-foot">
+      <div class="quota-card">
+        <div class="label">Requests this month</div>
+        <div class="value">{{ "{:,}".format(month_used) }} / {{ "{:,}".format(month_quota) }}</div>
+        <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ month_pct }}" aria-label="Monthly quota used"><span style="width:{{ month_pct }}%"></span></div>
+      </div>
+      <div class="side-who"><strong>{{ client_name }}</strong>{{ plan_name }} plan</div>
+      <form method="post" action="/logout"><button class="linklike" type="submit">Sign out</button></form>
+    </div>
+  </aside>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}

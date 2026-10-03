@@ -6,10 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.routers import dashboard_api, dashboard_pages, scrape
+from app.routers import dashboard_api, dashboard_pages, scrape, web
 from app.scrapers import browser_pool, http_pool
 
 # uvicorn only configures its own "uvicorn"/"uvicorn.error"/"uvicorn.access"
@@ -63,6 +66,8 @@ app = FastAPI(title="Scraper API", version="0.1.0", lifespan=lifespan)
 app.include_router(scrape.router)
 app.include_router(dashboard_api.router)
 app.include_router(dashboard_pages.router)
+app.include_router(web.router)
+app.mount("/static", StaticFiles(directory=str(Path(__file__).resolve().parent / "static")), name="static")
 
 
 @app.get("/health")

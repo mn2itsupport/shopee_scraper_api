@@ -3,7 +3,7 @@ import random
 
 from app.config import settings
 from app.models.schemas import PDPData
-from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScraperError
+from app.scrapers.base import BaseScraper, CaptchaBlockedError, ProductNotFoundError, ScrapeTimeoutError, ScraperError
 from app.scrapers.browser_pool import acquire_context
 from app.scrapers.sites.shopee_br import ShopeeBRScraper
 from app.scrapers.sites.shopee_id import ShopeeIDScraper
@@ -38,6 +38,19 @@ def get_scraper(site_key: str) -> BaseScraper:
 
 
 async def scrape_with_retries(site_key: str, url: str) -> PDPData:
+    """_scrape_attempts() bounded by SCRAPE_TOTAL_TIMEOUT_SECONDS overall, so a
+    slow transport plus retries can never outlive the HTTP gateway's own
+    timeout — the caller gets a clean ScrapeTimeoutError (HTTP 504) instead."""
+    try:
+        return await asyncio.wait_for(_scrape_attempts(site_key, url), timeout=settings.scrape_total_timeout_seconds)
+    except asyncio.TimeoutError as exc:
+        raise ScrapeTimeoutError(
+            f"Scrape timed out after {settings.scrape_total_timeout_seconds}s (retries included). "
+            "The target is responding slowly; try again."
+        ) from exc
+
+
+async def _scrape_attempts(site_key: str, url: str) -> PDPData:
     """Runs the adapter inside a fresh browser context, retrying on CAPTCHA
     with a brand-new context (and rotated proxy) up to CAPTCHA_MAX_RETRIES
     times. Re-raises CaptchaBlockedError if still blocked after retries.

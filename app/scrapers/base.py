@@ -25,6 +25,11 @@ class ScraperError(Exception):
     """Raised for a failure that isn't a CAPTCHA/anti-bot wall (see CaptchaBlockedError)."""
 
 
+class ScrapeTimeoutError(ScraperError):
+    """Raised when one whole scrape (all retries together) exceeds
+    SCRAPE_TOTAL_TIMEOUT_SECONDS — surfaced to callers as HTTP 504."""
+
+
 class ProductNotFoundError(ScraperError):
     """Raised when the site confirms the product doesn't exist (dead/removed listing),
     as opposed to an actual scrape failure — callers treat this as a successful scrape

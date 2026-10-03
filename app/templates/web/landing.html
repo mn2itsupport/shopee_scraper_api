@@ -1,0 +1,133 @@
+{% extends "web/base.html" %}
+{% from "web/macros.html" import logo_mark %}
+{% block title %}{{ product_name }} · Product data API{% endblock %}
+{% block body %}
+<header class="wrap topnav">
+  <a class="brand dark" href="/" style="padding:0">
+    <span class="brand-mark">{{ logo_mark("#fff") }}</span>
+    <span class="brand-name">{{ product_name }}</span>
+  </a>
+  <nav aria-label="Site">
+    <a class="plain" href="#products">Product</a>
+    <a class="plain" href="#pricing">Pricing</a>
+    <a class="plain" href="#faq">FAQ</a>
+    <a class="btn btn-primary" href="/login">Sign in</a>
+  </nav>
+</header>
+
+<section class="wrap hero">
+  <div>
+    <span class="eyebrow">Product data API</span>
+    <h1>Marketplace product data, as an API.</h1>
+    <p class="lead">Send a product page URL and get its data back as JSON. Rate limits, quotas and a usage dashboard come with every key.</p>
+    <div class="cta">
+      <a class="btn btn-primary btn-lg" href="/login">Sign in with your key</a>
+      <a class="btn btn-outline btn-lg" href="#products">See what it does</a>
+    </div>
+    <p class="fine">Access is provisioned per client. {% if contact_email %}Need a key? <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% endif %}</p>
+  </div>
+  <div class="terminal" aria-label="Example request">
+    <div class="dots"><i></i><i></i><i></i></div>
+<pre class="mono">curl -X POST https://api.example.com/v1/shopee_br/pdp \
+  -H "X-API-Key: sk_..." \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://shopee.com.br/product-i.123.456"}'
+
+{
+  "status": "success",
+  "data": { ... }
+}</pre>
+  </div>
+</section>
+
+<section id="products" class="band">
+  <div class="wrap section">
+    <h2 class="big">What you can do today</h2>
+    <p class="sub">One key, one dashboard. More endpoints are on the way and will use the same key and plan.</p>
+    <div class="cards">
+      <div class="pcard">
+        <div class="t">Product page API <span class="chip ok">Available</span></div>
+        <span class="path mono">POST /v1/{site}/pdp</span>
+        <p>Product detail pages from Shopee in seven countries: Brazil, Thailand, Vietnam, Singapore, Malaysia, Philippines and Indonesia. Fields available vary by country.</p>
+      </div>
+      <div class="pcard">
+        <div class="t">Batch requests <span class="chip ok">Available</span></div>
+        <span class="path mono">POST /v1/{site}/pdp/batch</span>
+        <p>Up to {{ max_batch }} URLs in one call. A failed URL does not fail the others.</p>
+      </div>
+      <div class="pcard">
+        <div class="t">Usage dashboard <span class="chip ok">Available</span></div>
+        <span class="path mono">/app</span>
+        <p>Requests per day, success rate, top domains and recent requests for your key, plus a playground to try URLs.</p>
+      </div>
+      <div class="pcard">
+        <div class="t">Unblocker <span class="chip">Coming soon</span></div>
+        <span class="path mono">POST /v1/unblock</span>
+        <p>Fetch any public page through anti-bot protection.</p>
+      </div>
+      <div class="pcard">
+        <div class="t">Screenshots <span class="chip">Coming soon</span></div>
+        <span class="path mono">POST /v1/screenshot</span>
+        <p>Full-page or element captures from a real browser.</p>
+      </div>
+      <div class="pcard">
+        <div class="t">AI extract and webhooks <span class="chip">Coming soon</span></div>
+        <span class="path mono">POST /v1/extract</span>
+        <p>Describe the fields you want and get JSON back, with async jobs and signed webhooks.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap section">
+  <h2 class="big">How a request works</h2>
+  <div class="steps">
+    <div class="step"><div class="n">1</div><div class="t">Send a URL</div><p>Call one endpoint with your API key and the product page URL.</p></div>
+    <div class="step"><div class="n">2</div><div class="t">We fetch it</div><p>The request is rate-limited and checked against your quota, then fetched, with automatic retries when a page blocks it.</p></div>
+    <div class="step"><div class="n">3</div><div class="t">Get JSON back</div><p>Every request, successful or not, appears in your dashboard.</p></div>
+  </div>
+</section>
+
+{% if plans %}
+<section id="pricing" class="band">
+  <div class="wrap section">
+    <h2 class="big" style="text-align:center">Plans</h2>
+    <p class="sub" style="margin-left:auto;margin-right:auto;text-align:center">Each plan sets a per-minute rate and daily and monthly request quotas.</p>
+    <div class="plans">
+      {% for p in plans %}
+      <div class="plan{{ ' hi' if loop.index == 2 }}">
+        <div class="nm">{{ p.name|capitalize }}</div>
+        <div class="pr">{{ p.price }}{% if p.has_price %}<small> / {{ p.days }} days</small>{% endif %}</div>
+        <ul>
+          <li>{{ p.rpm }} requests per minute</li>
+          <li>{{ p.daily }} requests per day</li>
+          <li>{{ p.monthly }} requests per month</li>
+        </ul>
+        {% if contact_email %}<a class="btn btn-lg {{ 'btn-primary' if loop.index == 2 else 'btn-outline' }}" style="margin-top:auto" href="mailto:{{ contact_email }}?subject=Access%20request%3A%20{{ p.name|urlencode }}">Request access</a>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section id="faq" class="faq">
+  <h2>Questions</h2>
+  <details><summary>Do failed requests count against my quota?</summary><p>Yes. Every request is logged and counted, including ones that fail or hit a block, so retry sparingly.</p></details>
+  <details><summary>Which sites are supported?</summary><p>Shopee product pages in seven countries today. Coverage and fields differ by country; the dashboard shows your success rate per domain.</p></details>
+  <details><summary>Can I use my own proxies?</summary><p>Proxies are handled on our side. You only send the URL.</p></details>
+  <details><summary>Is scraping allowed?</summary><p>You are responsible for following each site’s terms of service and robots.txt. Use the API only for data you have the right to collect.</p></details>
+</section>
+
+<section class="cta-band">
+  <div class="wrap">
+    <div>
+      <h2>Make your first request in a minute.</h2>
+      <p>Sign in, paste a product URL in the playground, copy the code.</p>
+    </div>
+    <a class="btn btn-lg btn-bright" href="/login">Sign in with your key</a>
+  </div>
+</section>
+
+<footer class="foot"><div class="wrap"><span>© {{ product_name }}</span></div></footer>
+{% endblock %}

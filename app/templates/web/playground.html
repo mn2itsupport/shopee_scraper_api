@@ -1,0 +1,149 @@
+{% extends "web/app_base.html" %}
+{% block page_title %}Playground{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Playground</h1>
+    <p>Try a request, then copy the code. Playground requests are real and count against your quota.</p>
+  </div>
+</header>
+
+<section class="row">
+  <div class="card grow" style="display:flex;flex-direction:column;gap:18px">
+    <div class="tabs" role="tablist" aria-label="Request type">
+      <button class="tab" role="tab" aria-selected="true" type="button">Product page</button>
+      <button class="tab" role="tab" aria-selected="false" type="button" disabled>Unblock<small>Soon</small></button>
+      <button class="tab" role="tab" aria-selected="false" type="button" disabled>Screenshot<small>Soon</small></button>
+      <button class="tab" role="tab" aria-selected="false" type="button" disabled>AI extract<small>Soon</small></button>
+    </div>
+    <div class="field">
+      <label for="site">Site</label>
+      <select id="site" class="input" style="font-size:14px">
+        {% for s in sites %}<option value="{{ s.site_key }}">{{ s.display_name }} ({{ s.site_key }})</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="url">Product URL</label>
+      <input id="url" class="input mono" type="text" placeholder="https://shopee.com.br/product-name-i.123.456" autocomplete="off">
+    </div>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px">
+      <span class="muted" style="font-size:13px">Counts as 1 request, whether it succeeds or not. Product pages can take up to 4 minutes.</span>
+      <button id="run" class="btn btn-primary btn-lg" type="button">Run request</button>
+    </div>
+  </div>
+
+  <div class="code-panel grow-2" style="flex:1.3 1 420px">
+    <div class="code-head">
+      <div class="code-tabs" role="tablist" aria-label="Output">
+        <button class="code-tab" role="tab" aria-selected="true" data-tab="response" type="button">Response</button>
+        <button class="code-tab" role="tab" aria-selected="false" data-tab="curl" type="button">cURL</button>
+        <button class="code-tab" role="tab" aria-selected="false" data-tab="python" type="button">Python</button>
+      </div>
+      <span id="status" class="code-status" role="status"></span>
+    </div>
+    <pre id="out" class="code-body">Press “Run request” to see a response.</pre>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var siteEl = document.getElementById("site");
+  var urlEl = document.getElementById("url");
+  var runEl = document.getElementById("run");
+  var outEl = document.getElementById("out");
+  var statusEl = document.getElementById("status");
+  var tab = "response";
+  var lastResponse = "Press “Run request” to see a response.";
+
+  function snippet(kind) {
+    var base = window.location.origin + "/v1/" + siteEl.value + "/pdp";
+    var url = urlEl.value || "https://shopee.com.br/product-name-i.123.456";
+    if (kind === "curl") {
+      return "curl -X POST " + base + " \\\n  -H \"X-API-Key: YOUR_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '" + JSON.stringify({ url: url }) + "'";
+    }
+    return "import requests\n\nr = requests.post(\n    \"" + base + "\",\n    headers={\"X-API-Key\": \"YOUR_API_KEY\"},\n    json=" + JSON.stringify({ url: url }) + ",\n)\nprint(r.json())";
+  }
+
+  function render() {
+    outEl.textContent = tab === "response" ? lastResponse : snippet(tab);
+  }
+
+  document.querySelectorAll(".code-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      tab = btn.dataset.tab;
+      document.querySelectorAll(".code-tab").forEach(function (b) { b.setAttribute("aria-selected", String(b === btn)); });
+      render();
+    });
+  });
+  siteEl.addEventListener("change", render);
+  urlEl.addEventListener("input", render);
+
+  // The server gives up on a scrape after SCRAPE_TOTAL_TIMEOUT_SECONDS (240 s by
+  // default) and answers 504; the browser waits a little longer than that so it
+  // normally sees the server's own message rather than aborting first.
+  var CLIENT_TIMEOUT_MS = 290000;
+
+  function showResponse(text, statusText, isError) {
+    lastResponse = text;
+    statusEl.className = "code-status" + (isError ? " err" : "");
+    statusEl.textContent = statusText;
+    tab = "response";
+    document.querySelectorAll(".code-tab").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.tab === "response")); });
+    render();
+  }
+
+  runEl.addEventListener("click", function () {
+    var url = urlEl.value.trim();
+    if (!url) { urlEl.focus(); return; }
+    runEl.disabled = true;
+
+    var started = performance.now();
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function () { controller.abort(); }, CLIENT_TIMEOUT_MS);
+    function elapsed() { return Math.floor((performance.now() - started) / 1000); }
+
+    // Live progress: this endpoint can legitimately take minutes, so show that
+    // something is happening instead of an empty panel.
+    function tick() {
+      var s = elapsed();
+      statusEl.className = "code-status";
+      statusEl.textContent = "Running… " + s + " s";
+      lastResponse = s < 20
+        ? "Request sent. Waiting for the page to be fetched…"
+        : "Still working (" + s + " s). Slow pages can take up to 4 minutes, so keep this tab open.";
+      if (tab === "response") { render(); }
+    }
+    tick();
+    var timerId = setInterval(tick, 1000);
+
+    fetch("/app/api/scrape", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ site_key: siteEl.value, url: url }),
+      signal: controller.signal
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) { return { res: res, body: body }; });
+    }).then(function (r) {
+      if (r.res.status === 401) { window.location.href = "/login?next=/app/playground"; return; }
+      var note = r.res.status === 504 ? " · timed out" : "";
+      showResponse(JSON.stringify(r.body, null, 2), r.res.status + " · " + elapsed() + " s" + note, !r.res.ok);
+    }).catch(function (err) {
+      var aborted = err && err.name === "AbortError";
+      showResponse(
+        aborted
+          ? "No answer after " + elapsed() + " s, so the browser stopped waiting.\n\nThe server may still finish this request. It will appear under Recent requests on the Overview page."
+          : "The connection was lost after " + elapsed() + " s (" + err + ").\n\nThe server may still finish this request. Check Recent requests on the Overview page before retrying.",
+        aborted ? "No answer · " + elapsed() + " s" : "Connection lost · " + elapsed() + " s",
+        true
+      );
+    }).finally(function () {
+      clearTimeout(timeoutId);
+      clearInterval(timerId);
+      runEl.disabled = false;
+    });
+  });
+})();
+</script>
+{% endblock %}
