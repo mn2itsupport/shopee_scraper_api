@@ -77,6 +77,20 @@ curl -X POST http://localhost:8000/v1/shopee_br/pdp \
 - `GET /dashboard` — admin, all-clients usage (HTTP Basic auth, `ADMIN_DASHBOARD_PASSWORD`).
 - `GET /dashboard/me?api_key=sk_...` — a client's own usage, no admin password.
 
+## Web UI (landing, sign-in, /app)
+
+`app/routers/web.py` serves the customer-facing UI from `app/templates/web/`
+and `app/static/web.css`: `/` (landing, plans read live from the `plans`
+table), `/login`, and `/app`, `/app/playground`, `/app/keys`. There are no user
+accounts — a client *is* an API key — so sign-in means pasting a key, kept in
+an HttpOnly cookie (`app/core/web_auth.py`) and re-validated against `api_keys`
+on every page load. `/app/api/scrape` runs the same pipeline as
+`POST /v1/{site}/pdp` with the signed-in key, so playground requests count
+against quota. Per-key overview numbers come from `app/core/web_stats.py`.
+Jobs/webhooks, signup, onboarding, billing and the unblock/screenshot/AI-extract
+endpoints from the design prototype are not built. Tests: `tests/test_web_ui.py`
+(Supabase replaced by an in-memory fake). Settings: `PRODUCT_NAME`, `CONTACT_EMAIL`.
+
 ## Architecture: the request pipeline
 
 `POST /v1/{site_key}/pdp` (`app/routers/scrape.py`) runs every request

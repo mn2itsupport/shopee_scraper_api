@@ -1,0 +1,69 @@
+{% extends "web/app_base.html" %}
+{% block page_title %}Overview{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Overview</h1>
+    <p>Last {{ stats.days }} days{% if stats.truncated %} · showing the most recent 20,000 requests{% endif %}</p>
+  </div>
+  <a class="btn btn-primary" href="/app/playground">New request</a>
+</header>
+
+<section class="kpis" aria-label="Key numbers">
+  <div class="card kpi"><div class="k-label">Requests</div><div class="k-value">{{ "{:,}".format(stats.total) }}</div><div class="k-note">across {{ stats.domain_count }} domain{{ '' if stats.domain_count == 1 else 's' }}</div></div>
+  <div class="card kpi"><div class="k-label">Success rate</div><div class="k-value">{{ stats.success_rate }}</div><div class="k-note">after automatic retries</div></div>
+  <div class="card kpi"><div class="k-label">Quota used today</div><div class="k-value">{{ "{:,}".format(usage.today) }}</div><div class="k-note">of {{ "{:,}".format(plan_daily) }} per day</div></div>
+  <div class="card kpi"><div class="k-label">Avg. latency</div><div class="k-value">{{ stats.avg_latency }}</div><div class="k-note">successful requests</div></div>
+</section>
+
+<section class="row">
+  <div class="card grow-2">
+    <h2>Requests per day</h2>
+    {% if stats.total %}
+    <div class="bars">
+      {% for b in stats.buckets %}
+      <div class="bar"><span>{{ b.count }}</span><i style="height:{{ b.height }}px"></i></div>
+      {% endfor %}
+    </div>
+    <div class="bar-days">{% for b in stats.buckets %}<span>{{ b.day }}</span>{% endfor %}</div>
+    {% else %}
+    <p class="empty">No requests yet. Send your first one from the <a href="/app/playground">playground</a>.</p>
+    {% endif %}
+  </div>
+  <div class="card grow">
+    <h2>Top domains</h2>
+    {% for d in stats.domains %}
+    <div class="domain">
+      <div><div class="n mono">{{ d.name }}</div><div class="c">{{ "{:,}".format(d.count) }} request{{ '' if d.count == 1 else 's' }}</div></div>
+      <div class="right"><strong>{{ d.rate }}</strong><div class="c">success</div></div>
+    </div>
+    {% else %}
+    <p class="empty">Nothing to show yet.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>Recent requests</h2>
+  {% if stats.recent %}
+  <div class="scroll-x">
+    <table style="min-width:620px;margin-top:8px">
+      <thead><tr><th>When</th><th>Site</th><th>URL</th><th>Result</th><th class="right">Time</th></tr></thead>
+      <tbody>
+        {% for r in stats.recent %}
+        <tr>
+          <td class="muted" style="white-space:nowrap">{{ r.when }}</td>
+          <td class="mono" style="font-size:13px">{{ r.site }}</td>
+          <td class="mono" style="font-size:13px">{{ r.url }}</td>
+          <td><span class="chip {{ r.tone }}">{{ r.result }}</span></td>
+          <td class="right" style="white-space:nowrap">{{ r.time }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No requests in this period.</p>
+  {% endif %}
+</section>
+{% endblock %}

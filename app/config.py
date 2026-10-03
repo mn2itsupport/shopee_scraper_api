@@ -11,6 +11,12 @@ class Settings(BaseSettings):
 
     admin_dashboard_password: str = "change-me"
 
+    # Branding/contact for the customer-facing web UI (landing page, login,
+    # /app/* pages). contact_email, when set, enables the "Request access"
+    # buttons on the pricing section; leave empty to hide them.
+    product_name: str = "Harvest"
+    contact_email: str = ""
+
     playwright_headless: bool = True
     max_concurrent_scrapes: int = 3
     scrape_timeout_seconds: int = 30

@@ -1,0 +1,101 @@
+{% extends "web/app_base.html" %}
+{% block page_title %}Keys &amp; plan{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Keys &amp; plan</h1>
+    <p>Manage your API keys and see what your plan includes.</p>
+  </div>
+</header>
+
+<section class="card">
+  <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
+    <div style="display:flex;gap:10px;align-items:center"><h2>{{ plan.name }} plan</h2><span class="chip ok">Active</span></div>
+    <span class="muted" style="font-size:14px">{{ plan_price }}{% if plan.price_cents %} / {{ plan.duration_days }} days{% endif %} · renews by {{ expires }}</span>
+  </div>
+  <div class="plan-grid">
+    <div><div class="l">Requests per minute</div><div class="v">{{ plan.requests_per_minute }}</div></div>
+    <div><div class="l">Today</div><div class="v">{{ "{:,}".format(usage.today) }} / {{ "{:,}".format(plan.daily_quota) }}</div></div>
+    <div><div class="l">This month</div><div class="v">{{ "{:,}".format(usage.month) }} / {{ "{:,}".format(plan.monthly_quota) }}</div></div>
+    <div><div class="l">Expires</div><div class="v">{{ expires }}</div></div>
+  </div>
+  <p class="muted" style="font-size:13px;margin-top:14px">
+    To renew or change plan{% if contact_email %}, email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% else %}, contact your account manager{% endif %}.
+  </p>
+</section>
+
+<section class="card">
+  <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
+    <h2>API keys</h2>
+    <button id="create" class="btn btn-primary" type="button"{% if not can_create %} disabled title="Limit of {{ max_keys }} active keys reached"{% endif %}>Create key</button>
+  </div>
+  <div id="newkey" hidden style="display:none;flex-direction:column;gap:12px;margin-top:16px">
+    <div class="keybox"><code id="newkey-value"></code><button id="copy" type="button">Copy</button></div>
+    <p class="callout">Copy it now. For your security we show the full key only once.</p>
+  </div>
+  <p id="keyerr" class="alert" hidden style="display:none;margin-top:16px" role="alert"></p>
+  <div class="scroll-x" style="margin-top:12px">
+    <table style="min-width:600px">
+      <thead><tr><th>Key</th><th>Created</th><th>Expires</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>
+        {% for k in keys %}
+        <tr>
+          <td class="mono" style="font-size:13px">{{ k.prefix }}••••••••{% if k.current %} <span class="chip">This key</span>{% endif %}</td>
+          <td class="muted" style="white-space:nowrap">{{ k.created }}</td>
+          <td class="muted" style="white-space:nowrap">{{ k.expires }}</td>
+          <td><span class="chip {{ 'ok' if k.active else '' }}">{{ k.status }}</span></td>
+          <td class="right">
+            {% if k.active and not k.current %}
+            <button class="btn btn-outline btn-danger revoke" type="button" data-id="{{ k.id }}" aria-label="Revoke key {{ k.prefix }}">Revoke</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var errEl = document.getElementById("keyerr");
+  function showError(msg) { errEl.textContent = msg; errEl.hidden = false; errEl.style.display = "block"; }
+  function post(url) {
+    return fetch(url, { method: "POST" }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        if (!res.ok) { throw new Error(body.detail || ("Request failed (" + res.status + ")")); }
+        return body;
+      });
+    });
+  }
+
+  var create = document.getElementById("create");
+  create.addEventListener("click", function () {
+    create.disabled = true;
+    post("/app/api/keys").then(function (body) {
+      document.getElementById("newkey-value").textContent = body.api_key;
+      var box = document.getElementById("newkey");
+      box.hidden = false; box.style.display = "flex";
+      errEl.style.display = "none";
+    }).catch(function (e) { showError(e.message); create.disabled = false; });
+  });
+
+  document.getElementById("copy").addEventListener("click", function () {
+    var btn = this;
+    navigator.clipboard.writeText(document.getElementById("newkey-value").textContent).then(function () {
+      btn.textContent = "Copied";
+    });
+  });
+
+  document.querySelectorAll(".revoke").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (!window.confirm("Revoke this key? Anything using it will stop working immediately.")) { return; }
+      post("/app/api/keys/" + btn.dataset.id + "/revoke").then(function () { window.location.reload(); })
+        .catch(function (e) { showError(e.message); });
+    });
+  });
+})();
+</script>
+{% endblock %}
