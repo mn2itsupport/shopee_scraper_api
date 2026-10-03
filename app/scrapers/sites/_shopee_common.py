@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import re
+from urllib.parse import parse_qs, urlsplit
 
 import certifi
 import httpx
@@ -101,12 +102,25 @@ _MFE_INITIAL_DATA_BLOCK = re.compile(
 _ALT_PRODUCT_PATH_URL = re.compile(r"^(https?://[^/]+)/product/(\d+)/(\d+)(?:[/?#].*)?$", re.IGNORECASE)
 
 
+# Shopee's internal PDP API URL (e.g. copied from DevTools):
+# /api/v4/pdp/get_pc?item_id=...&shop_id=...&... — opening it directly is
+# risk-control-rejected (error 90309999, confirmed on shopee_th 2026-10-03),
+# so rewrite it to the product page that makes that call itself.
+_PDP_API_URL = re.compile(r"^(https?://[^/]+)/api/v4/pdp/get_pc\?", re.IGNORECASE)
+
+
 def _normalize_shopee_url(url: str) -> str:
     match = _ALT_PRODUCT_PATH_URL.match(url)
-    if not match:
-        return url
-    origin, shop_id, item_id = match.groups()
-    return f"{origin}/product-i.{shop_id}.{item_id}"
+    if match:
+        origin, shop_id, item_id = match.groups()
+        return f"{origin}/product-i.{shop_id}.{item_id}"
+    match = _PDP_API_URL.match(url)
+    if match:
+        query = parse_qs(urlsplit(url).query)
+        shop_id, item_id = query.get("shop_id", [""])[0], query.get("item_id", [""])[0]
+        if shop_id.isdigit() and item_id.isdigit():
+            return f"{match.group(1)}/product-i.{shop_id}.{item_id}"
+    return url
 
 
 def _playwright_proxy_to_url(proxy: dict | None) -> str | None:

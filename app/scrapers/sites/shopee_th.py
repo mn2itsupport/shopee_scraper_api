@@ -299,6 +299,9 @@ class ShopeeTHScraper(ShopeeScraper):
         return pdp.model_copy(update={"raw": _xtracto_record_to_get_pc_raw(pdp.raw)})
 
     async def fetch_pdp_via_curl_cffi(self, url: str) -> PDPData:
+        # Up front so the probe (which may run on the agent's older copy of
+        # this code) is also handed the product page, not e.g. a get_pc URL.
+        url = _normalize_shopee_url(url)
         patch: dict | None = None
         if settings.shopee_th_price_probe_enabled:
             # return_exceptions: a curl_cffi failure must not discard a probe
