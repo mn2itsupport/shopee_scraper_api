@@ -104,7 +104,9 @@ through, in order:
    client's plan); `check_quota` is a DB-backed daily/monthly check against
    `usage_logs`. Burst limiting only works correctly for a single app
    instance — see Known limitations.
-3. **Scraping** (`app/scrapers/registry.py::scrape_with_retries`) — looks up
+3. **Scraping** (`app/scrapers/registry.py::scrape_with_retries`, capped at
+   `SCRAPE_TOTAL_TIMEOUT_SECONDS` overall — a timeout is HTTP 504, logged as
+   `failed`) — looks up
    the adapter in `SCRAPER_REGISTRY`, runs it inside a fresh
    `browser_pool.acquire_context()`, and retries with a brand-new context
    (+ rotated proxy) up to `CAPTCHA_MAX_RETRIES` times on

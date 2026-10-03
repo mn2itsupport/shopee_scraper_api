@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     max_concurrent_scrapes: int = 3
     scrape_timeout_seconds: int = 30
     captcha_max_retries: int = 2
+    # Hard cap on one whole scrape request, retries included. Without it a slow
+    # Web Unlocker call (~110-250s each) times CAPTCHA_MAX_RETRIES attempts can
+    # run 8+ minutes — past Railway's ~300s gateway limit, so the caller gets a
+    # dropped connection instead of an answer. Keep this under that limit.
+    scrape_total_timeout_seconds: int = 240
 
     # ShopeeScraper.fetch_pdp() only (the browser-driven local/CDP transport):
     # visit the site's home page first and let its anti-bot layer set the

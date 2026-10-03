@@ -11,7 +11,7 @@ from app.core.usage_logger import log_usage
 from app.db.client import get_supabase
 from app.deps import get_site_id
 from app.models.schemas import AuthedKey, BatchScrapeItem, BatchScrapeRequest, BatchScrapeResponse, ScrapeRequest, ScrapeResponse
-from app.scrapers.base import CaptchaBlockedError, ProductNotFoundError, ScraperError
+from app.scrapers.base import CaptchaBlockedError, ProductNotFoundError, ScrapeTimeoutError, ScraperError
 from app.scrapers.registry import scrape_with_retries
 
 router = APIRouter(prefix="/v1", tags=["scrape"])
@@ -67,6 +67,7 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
         pdp = None
         not_found_data: dict | None = None
         is_not_found = False
+        timed_out = False
 
         try:
             pdp = await scrape_with_retries(site_key, url)
@@ -82,6 +83,12 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
         except CaptchaBlockedError as exc:
             status = "captcha_blocked"
             error_message = str(exc)
+        except ScrapeTimeoutError as exc:
+            # Logged as a plain "failed" (usage_logs.status has a fixed set of
+            # values) but returned to the caller as "timeout" -> HTTP 504.
+            status = "failed"
+            error_message = str(exc)
+            timed_out = True
         except ScraperError as exc:
             status = "failed"
             error_message = str(exc)
@@ -97,7 +104,10 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
             # used above for DB storage/dashboard, not exposed to callers.
             return BatchScrapeItem(url=url, status="success", data=pdp.raw), False
 
-        return BatchScrapeItem(url=url, status=status, error=error_message, data=not_found_data), is_not_found
+        return (
+            BatchScrapeItem(url=url, status="timeout" if timed_out else status, error=error_message, data=not_found_data),
+            is_not_found,
+        )
     except Exception as exc:
         logger.exception("Unexpected error scraping %s", url)
         return BatchScrapeItem(url=url, status="failed", error=f"Unexpected error: {exc}"), False
@@ -127,6 +137,9 @@ async def scrape_pdp(
         return ScrapeResponse(status="success", data=item.data).model_dump(exclude_none=True)
     if item.status == "rejected":
         raise HTTPException(status_code=429, detail=item.error)
+
+    if item.status == "timeout":
+        raise HTTPException(status_code=504, detail=item.error or "Scrape timed out")
 
     status_code = 502 if item.status == "captcha_blocked" else 500
     raise HTTPException(status_code=status_code, detail=item.error or "Scrape failed")
