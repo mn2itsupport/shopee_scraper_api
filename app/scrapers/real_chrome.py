@@ -6,6 +6,7 @@ touches CDP directly when deployed — it calls the agent over HTTP instead.
 
 import asyncio
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import async_playwright
 
@@ -13,11 +14,27 @@ from app.scrapers.sites._shopee_common import _normalize_shopee_url
 
 logger = logging.getLogger(__name__)
 
+# One tab at a time, same as scripts/price_agent.py: a real logged-in session
+# (or a GoLogin cloud profile, which can't run twice concurrently) shouldn't
+# see a burst of parallel automated navigations. Only matters when the API
+# attaches directly via SHOPEE_TH_REAL_CHROME_CDP_URL instead of the agent.
+_lock = asyncio.Semaphore(1)
+
+
+def _redact(cdp_url: str) -> str:
+    """cdp_url may carry a secret in its query string (GoLogin cloud:
+    wss://cloudbrowser.gologin.com/connect?token=...&profile=...) and
+    Playwright echoes the full URL in its connect errors."""
+    parts = urlsplit(cdp_url)
+    return urlunsplit(parts._replace(query="<redacted>")) if parts.query else cdp_url
+
 
 async def capture_get_pc(cdp_url: str, url: str, timeout_s: int) -> dict:
     """Opens one tab in the attached Chrome's default context (so it carries
     the real login), waits for the page's own get_pc XHR, and returns its
-    JSON body. Closes only that tab. Raises on connect/navigation/timeout.
+    JSON body. Closes only that tab. Raises on connect/navigation/timeout,
+    with cdp_url's query string (which may hold a token) redacted from the
+    error message.
     """
 
     async def _capture() -> dict:
@@ -44,4 +61,15 @@ async def capture_get_pc(cdp_url: str, url: str, timeout_s: int) -> dict:
                     await page.close()
                 await browser.close()
 
-    return await asyncio.wait_for(_capture(), timeout=timeout_s + 10)
+    async with _lock:
+        try:
+            return await asyncio.wait_for(_capture(), timeout=timeout_s + 10)
+        except Exception as exc:
+            message = str(exc)
+            if cdp_url in message:
+                # `from None`: a chained traceback would print the original,
+                # unredacted message right back into the logs.
+                raise RuntimeError(
+                    f"{type(exc).__name__}: {message.replace(cdp_url, _redact(cdp_url))}"
+                ) from None
+            raise
