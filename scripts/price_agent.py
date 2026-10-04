@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import httpx  # noqa: E402
 from fastapi import FastAPI, Header, HTTPException  # noqa: E402
 
 from app.config import settings  # noqa: E402
@@ -51,3 +52,18 @@ async def price(url: str, x_agent_token: str = Header(default="")) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/status")
+async def status() -> dict:
+    """Polled by the API's price-agent monitor: unlike /health (which the
+    local watchdog uses to decide whether to restart this process), it also
+    reports whether Chrome itself is reachable over CDP."""
+    cdp_url = settings.shopee_th_real_chrome_cdp_url or "http://127.0.0.1:9222"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            (await client.get(f"{cdp_url.rstrip('/')}/json/version")).raise_for_status()
+        chrome = True
+    except Exception:
+        chrome = False
+    return {"ok": chrome, "chrome": chrome, "busy": _lock.locked()}

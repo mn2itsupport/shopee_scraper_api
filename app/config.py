@@ -283,6 +283,16 @@ class Settings(BaseSettings):
     # sides use (the agent checks it, the API sends it as X-Agent-Token).
     shopee_th_price_agent_url: str = ""
     shopee_th_price_agent_token: str = ""
+    # API-side monitor of that agent (app/scrapers/price_agent_monitor.py):
+    # polls its /status and POSTs {"text"/"content": ...} (Slack- and
+    # Discord-compatible) when it goes down or recovers. Empty webhook falls
+    # back to shopee_th_session_alert_webhook_url; with neither set the
+    # monitor only logs.
+    price_agent_alert_webhook_url: str = ""
+    price_agent_check_interval_seconds: int = 60
+    # Consecutive failed checks before alerting, so one slow check or a
+    # watchdog restart doesn't page anyone.
+    price_agent_alert_after_failures: int = 3
 
     # shopee_br's own persistent-profile setup, same mechanism as
     # shopee_th_use_persistent_profile above (browser_profiles/shopee_br/,

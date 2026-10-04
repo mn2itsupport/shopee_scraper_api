@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.routers import dashboard_api, dashboard_pages, scrape, web
-from app.scrapers import browser_pool, http_pool
+from app.scrapers import browser_pool, http_pool, price_agent_monitor
 
 # uvicorn only configures its own "uvicorn"/"uvicorn.error"/"uvicorn.access"
 # loggers — app.* loggers (e.g. shopee_login, browser_pool) have no handler
@@ -56,9 +56,11 @@ async def lifespan(app: FastAPI):
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=100))
     http_pool.startup()
     await browser_pool.startup()
+    price_agent_monitor.start()
     try:
         yield
     finally:
+        await price_agent_monitor.stop()
         await browser_pool.shutdown()
         await http_pool.shutdown()
 

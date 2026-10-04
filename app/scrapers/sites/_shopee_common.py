@@ -110,6 +110,12 @@ _PDP_API_URL = re.compile(r"^(https?://[^/]+)/api/v4/pdp/get_pc\?", re.IGNORECAS
 
 
 def _normalize_shopee_url(url: str) -> str:
+    url = url.strip()
+    if "://" not in url:
+        # Pasted without a scheme ("shopee.co.th/product/1/2") — confirmed
+        # live 2026-10-04: Chrome rejects it as an invalid URL, so the price
+        # agent failed every such request.
+        url = "https://" + url.lstrip("/")
     match = _ALT_PRODUCT_PATH_URL.match(url)
     if match:
         origin, shop_id, item_id = match.groups()

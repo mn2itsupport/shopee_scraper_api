@@ -60,3 +60,15 @@ def test_get_pc_api_url_rewritten(url, expected):
 def test_get_pc_api_url_without_ids_unchanged():
     url = "https://shopee.co.th/api/v4/pdp/get_pc?detail_level=0"
     assert _normalize_shopee_url(url) == url
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("shopee.co.th/product/36957691/7915998466", "https://shopee.co.th/product-i.36957691.7915998466"),
+        ("shopee.co.th/product-i.481607585.11168850119", "https://shopee.co.th/product-i.481607585.11168850119"),
+        ("  //shopee.com.br/product-slug-i.123.456 ", "https://shopee.com.br/product-slug-i.123.456"),
+    ],
+)
+def test_missing_scheme_gets_https(url, expected):
+    assert _normalize_shopee_url(url) == expected
