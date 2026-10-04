@@ -171,6 +171,28 @@ Tips: switch during a quiet period (price is null while neither machine
 answers); to switch with zero downtime, bring the new machine up first and
 only then update the Railway URL.
 
+## Running several agents
+
+Each agent handles one product at a time (~8–9 s each, about 400 an hour), so
+more throughput means more machines. Set up each machine with Part 1, **each
+logged in with its own Shopee TH account**, all using the same token. Then
+in Railway:
+
+```
+SHOPEE_TH_PRICE_AGENT_URLS=https://<agent-1>,https://<agent-2>
+```
+
+- It replaces `SHOPEE_TH_PRICE_AGENT_URL` while set. Delete it to go back to
+  the single agent; nothing else changes.
+- Each URL goes to whichever agent is free (idle longest first). If that
+  agent fails or answers with a `get_pc` error, the URL is retried on the
+  next agent. "Not found" is final.
+- The monitor checks every agent and alerts per agent. While an agent is
+  down, work goes only to the others.
+- `MAX_CONCURRENT_SCRAPES` (default 3) must be at least the number of
+  agents, and callers should send about that many URLs at a time. Sending
+  far more queues them past `SCRAPE_TOTAL_TIMEOUT_SECONDS` (504).
+
 ## Operations and troubleshooting
 
 | Symptom | Likely cause | Fix |

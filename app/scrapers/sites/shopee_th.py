@@ -9,13 +9,11 @@ import httpx
 
 from app.config import settings
 from app.models.schemas import PDPData
+from app.scrapers import price_agents
 from app.scrapers.base import ScraperError
 from app.scrapers.sites._shopee_common import _ITEM_NOT_FOUND_ERROR_CODE, ShopeeScraper, _normalize_shopee_url
 
 logger = logging.getLogger(__name__)
-
-# Serializes calls to the price agent (see _fetch_get_pc_via_agent).
-_AGENT_QUEUE = asyncio.Semaphore(1)
 
 # curl_cffi's embedded mfe-initial-data snapshot duplicates a handful of
 # item/model fields under their legacy pre-get_pc names (itemid/shopid/name/
@@ -375,7 +373,7 @@ class ShopeeTHScraper(ShopeeScraper):
         return bool(
             settings.shopee_th_price_probe_enabled
             and settings.shopee_th_price_agent_first
-            and (settings.shopee_th_price_agent_url or settings.shopee_th_real_chrome_cdp_url)
+            and (price_agents.agent_urls() or settings.shopee_th_real_chrome_cdp_url)
         )
 
     async def _fetch_via_price_agent_first(self, url: str) -> PDPData | None:
@@ -426,7 +424,7 @@ class ShopeeTHScraper(ShopeeScraper):
         return self._parse_api_body(body, _normalize_shopee_url(url))
 
     def _select_price_probe(self, url: str):
-        if settings.shopee_th_price_agent_url:
+        if price_agents.agent_urls():
             return self._fetch_get_pc_via_agent(url)
         if settings.shopee_th_real_chrome_cdp_url:
             return self._fetch_get_pc_via_real_chrome(url)
@@ -452,23 +450,36 @@ class ShopeeTHScraper(ShopeeScraper):
         Chrome — for the live pdp/get_pc body over HTTP. This is the path a
         Railway deployment uses: the API never touches Chrome/CDP itself.
         """
+        # Queue here, one call per agent at a time, matching each agent (one
+        # Chrome tab at a time): the HTTP timeout then covers only the
+        # agent's own work, not time spent behind other requests in a burst.
+        # An agent that fails or answers with a get_pc error (e.g. its
+        # account got flagged) hands the URL to the next agent, if any.
+        tried: list[str] = []
+        body = None
+        while True:
+            async with price_agents.pool.acquire(exclude=tried) as agent:
+                if agent is None:
+                    return body
+                tried.append(agent)
+                body = await self._ask_agent(agent, url)
+            if isinstance(body, dict) and (not body.get("error") or body["error"] == _ITEM_NOT_FOUND_ERROR_CODE):
+                return body
+
+    async def _ask_agent(self, agent: str, url: str) -> dict | None:
         timeout_s = settings.shopee_th_price_probe_timeout_seconds
-        # Queue here, one call at a time, matching the agent (one Chrome tab
-        # at a time): the HTTP timeout then covers only the agent's own work,
-        # not time spent behind other requests in a burst.
-        async with _AGENT_QUEUE:
-            try:
-                async with httpx.AsyncClient(timeout=timeout_s + 15) as client:
-                    response = await client.get(
-                        f"{settings.shopee_th_price_agent_url.rstrip('/')}/price",
-                        params={"url": url},
-                        headers={"X-Agent-Token": settings.shopee_th_price_agent_token},
-                    )
-                response.raise_for_status()
-                return response.json()
-            except Exception:
-                logger.info("shopee_th price agent failed for %s", url, exc_info=True)
-                return None
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s + 15) as client:
+                response = await client.get(
+                    f"{agent}/price",
+                    params={"url": url},
+                    headers={"X-Agent-Token": settings.shopee_th_price_agent_token},
+                )
+            response.raise_for_status()
+            return response.json()
+        except Exception:
+            logger.info("shopee_th price agent %s failed for %s", agent, url, exc_info=True)
+            return None
 
     async def _fetch_get_pc_via_real_chrome(self, url: str) -> dict | None:
         """Same contract, but attaches to a real Chrome over CDP directly

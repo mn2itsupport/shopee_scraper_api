@@ -12,7 +12,7 @@ os.environ.setdefault("SUPABASE_URL", "http://example.invalid")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
 
 from app.config import settings  # noqa: E402
-from app.scrapers import price_agent_monitor  # noqa: E402
+from app.scrapers import price_agent_monitor, price_agents  # noqa: E402
 
 AGENT = "https://agent.invalid"
 WEBHOOK = "https://hooks.invalid/alert"
@@ -36,13 +36,14 @@ def agent(monkeypatch):
     monkeypatch.setattr(settings, "shopee_th_price_agent_url", AGENT)
     monkeypatch.setattr(settings, "price_agent_alert_webhook_url", WEBHOOK)
     monkeypatch.setattr(settings, "price_agent_alert_after_failures", 3)
-    monkeypatch.setattr(price_agent_monitor, "_state", price_agent_monitor._State())
+    monkeypatch.setattr(price_agent_monitor, "_states", {})
+    monkeypatch.setattr(price_agents, "pool", price_agents.AgentPool())
     return state
 
 
 async def _checks(n):
     for _ in range(n):
-        await price_agent_monitor.record(await price_agent_monitor.check_agent())
+        await price_agent_monitor.record(AGENT, await price_agent_monitor.check_agent(AGENT))
 
 
 @pytest.mark.asyncio
@@ -94,4 +95,31 @@ async def test_old_agent_without_status_falls_back_to_health(agent, monkeypatch)
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(price_agent_monitor.http_pool, "get_client", lambda: client)
 
-    assert await price_agent_monitor.check_agent() is None
+    assert await price_agent_monitor.check_agent(AGENT) is None
+
+
+@pytest.mark.asyncio
+async def test_down_agent_is_reported_to_the_pool_and_named(agent):
+    agent["status"] = None
+    await _checks(3)
+    assert price_agents.pool.down == {AGENT}
+    assert AGENT in agent["alerts"][0]
+    assert "Bright Data" in agent["alerts"][0]
+
+    agent["status"] = 200
+    await _checks(1)
+    assert price_agents.pool.down == set()
+
+
+@pytest.mark.asyncio
+async def test_agents_are_tracked_separately(agent, monkeypatch):
+    other = "https://agent2.invalid"
+    monkeypatch.setattr(settings, "shopee_th_price_agent_urls", f"{AGENT},{other}")
+    for _ in range(3):
+        await price_agent_monitor.record(other, "unreachable")
+        await price_agent_monitor.record(AGENT, None)
+
+    assert price_agents.pool.down == {other}
+    assert len(agent["alerts"]) == 1
+    assert other in agent["alerts"][0]
+    assert "1 other agent" in agent["alerts"][0]
