@@ -10,7 +10,7 @@ import httpx
 from app.config import settings
 from app.models.schemas import PDPData
 from app.scrapers.base import ScraperError
-from app.scrapers.sites._shopee_common import ShopeeScraper, _normalize_shopee_url
+from app.scrapers.sites._shopee_common import _ITEM_NOT_FOUND_ERROR_CODE, ShopeeScraper, _normalize_shopee_url
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +305,15 @@ class ShopeeTHScraper(ShopeeScraper):
         # Up front so the probe (which may run on the agent's older copy of
         # this code) is also handed the product page, not e.g. a get_pc URL.
         url = _normalize_shopee_url(url)
+        if self._price_agent_first():
+            pdp = await self._fetch_via_price_agent_first(url)
+            if pdp is not None:
+                return pdp
+            # Agent had nothing usable: Bright Data alone, without queueing
+            # this URL on the agent a second time.
+            pdp = await self._curl_cffi_fetch(url)
+            return pdp.model_copy(update={"raw": _dedupe_curl_cffi_legacy_keys(pdp.raw)})
+
         patch: dict | None = None
         if settings.shopee_th_price_probe_enabled:
             probe_task = asyncio.ensure_future(self._select_price_probe(url))
@@ -358,6 +367,33 @@ class ShopeeTHScraper(ShopeeScraper):
         rating = (item.get("item_rating") or {}).get("rating_star") or pdp.rating
         sold_count = item.get("historical_sold") or item.get("sold") or pdp.sold_count
         return pdp.model_copy(update={"raw": raw, "price": price, "rating": rating, "sold_count": sold_count})
+
+    @staticmethod
+    def _price_agent_first() -> bool:
+        # Only for a real logged-in Chrome (agent or CDP): the automated
+        # persistent-profile probe is too unreliable to put in front.
+        return bool(
+            settings.shopee_th_price_probe_enabled
+            and settings.shopee_th_price_agent_first
+            and (settings.shopee_th_price_agent_url or settings.shopee_th_real_chrome_cdp_url)
+        )
+
+    async def _fetch_via_price_agent_first(self, url: str) -> PDPData | None:
+        """Asks the price agent before Bright Data. Confirmed live 2026-10-04
+        that Bright Data's unlocker 502'd on nearly every shopee_th product
+        page while the agent answered all of them, so running curl_cffi first
+        (or alongside) only added cost and ~60-100s of latency. Returns the
+        agent's get_pc body as the answer, raises ProductNotFoundError when
+        the agent confirms the item doesn't exist, or None to fall through to
+        curl_cffi.
+        """
+        body = await self._select_price_probe(url)
+        if isinstance(body, dict) and body.get("error") == _ITEM_NOT_FOUND_ERROR_CODE:
+            return self._parse_api_body(body, url)
+        if not self._log_probe_outcome(body, url):
+            return None
+        logger.info("shopee_th answered from the price agent for %s", url)
+        return self._parse_api_body(body, url)
 
     def _log_probe_outcome(self, body: dict | None, url: str) -> dict | None:
         patch = self._patch_from_get_pc_body(body, url) if body else None

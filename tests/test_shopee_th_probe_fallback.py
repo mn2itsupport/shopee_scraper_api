@@ -15,7 +15,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
 
 from app.config import settings  # noqa: E402
 from app.models.schemas import PDPData  # noqa: E402
-from app.scrapers.base import ScraperError  # noqa: E402
+from app.scrapers.base import ProductNotFoundError, ScraperError  # noqa: E402
 from app.scrapers.sites import shopee_th  # noqa: E402
 from app.scrapers.sites.shopee_th import ShopeeTHScraper  # noqa: E402
 
@@ -50,6 +50,9 @@ def _probe_config(monkeypatch):
     monkeypatch.setattr(settings, "shopee_th_price_probe_enabled", True)
     monkeypatch.setattr(settings, "shopee_th_price_probe_merge", False)
     monkeypatch.setattr(settings, "shopee_th_price_probe_fallback", True)
+    # The tests below cover the parallel curl_cffi + probe path; agent-first
+    # has its own tests at the end of this file.
+    monkeypatch.setattr(settings, "shopee_th_price_agent_first", False)
 
 
 def _mock(scraper, monkeypatch, *, curl, probe):
@@ -297,3 +300,60 @@ async def test_merge_on_returns_without_price_when_probe_too_slow(scraper, monke
     assert result.title == "curl title"
     assert result.price is None
     assert events == ["probe cancelled"]
+
+
+@pytest.fixture
+def _agent_first(monkeypatch):
+    monkeypatch.setattr(settings, "shopee_th_price_agent_first", True)
+    monkeypatch.setattr(settings, "shopee_th_price_agent_url", "https://agent.invalid")
+
+
+@pytest.mark.asyncio
+async def test_agent_first_answers_without_calling_curl(scraper, monkeypatch, _agent_first):
+    curl = AsyncMock(side_effect=AssertionError("curl_cffi should not be called"))
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", curl)
+    monkeypatch.setattr(scraper, "_select_price_probe", lambda url: AsyncMock(return_value=GET_PC_BODY)())
+
+    result = await scraper.fetch_pdp_via_curl_cffi(URL)
+
+    assert result.title == "probe title"
+    assert result.price == 4.0
+    assert result.raw == GET_PC_BODY
+    curl.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_first_not_found_skips_curl(scraper, monkeypatch, _agent_first):
+    not_found = {"bff_meta": None, "error": 266900002, "error_msg": None, "data": None}
+    curl = AsyncMock(side_effect=AssertionError("curl_cffi should not be called"))
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", curl)
+    monkeypatch.setattr(scraper, "_select_price_probe", lambda url: AsyncMock(return_value=not_found)())
+
+    with pytest.raises(ProductNotFoundError):
+        await scraper.fetch_pdp_via_curl_cffi(URL)
+    curl.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_first_falls_back_to_curl_once(scraper, monkeypatch, _agent_first):
+    curl_pdp = PDPData(site_key="shopee_th", product_url=URL, title="curl title", raw={"data": {"item": {}}})
+    probe = AsyncMock(return_value=None)
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(return_value=curl_pdp))
+    monkeypatch.setattr(scraper, "_select_price_probe", lambda url: probe())
+
+    result = await scraper.fetch_pdp_via_curl_cffi(URL)
+
+    assert result.title == "curl title"
+    assert probe.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_first_off_without_agent_configured(scraper, monkeypatch, _agent_first):
+    monkeypatch.setattr(settings, "shopee_th_price_agent_url", "")
+    monkeypatch.setattr(settings, "shopee_th_real_chrome_cdp_url", "")
+    curl_pdp = PDPData(site_key="shopee_th", product_url=URL, title="curl title", raw={"data": {"item": {}}})
+    _mock(scraper, monkeypatch, curl={"return_value": curl_pdp}, probe={"return_value": GET_PC_BODY})
+
+    result = await scraper.fetch_pdp_via_curl_cffi(URL)
+
+    assert result.title == "curl title"

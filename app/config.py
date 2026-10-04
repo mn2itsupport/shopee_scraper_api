@@ -263,6 +263,11 @@ class Settings(BaseSettings):
     # from the probe's pdp/get_pc body instead of failing the request — only
     # if the probe actually returned a real item. Independent of _merge above.
     shopee_th_price_probe_fallback: bool = True
+    # Ask the price agent (or real Chrome) first and only call curl_cffi /
+    # Bright Data when it has no usable answer, instead of running both for
+    # every URL. No effect unless shopee_th_price_agent_url or
+    # shopee_th_real_chrome_cdp_url is set.
+    shopee_th_price_agent_first: bool = True
     # CDP endpoint of a real, human-logged-in Chrome (started via
     # scripts/launch_real_chrome_th.ps1, e.g. "http://127.0.0.1:9222"). When
     # set, the price probe reads pdp/get_pc from that Chrome instead of the
