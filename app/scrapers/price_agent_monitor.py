@@ -1,18 +1,20 @@
-"""Watches the shopee_th price agent (scripts/price_agent.py, on the machine
-with the real logged-in Chrome) and alerts when it goes down or recovers.
+"""Watches each shopee_th price agent (scripts/price_agent.py, on the machine
+with the real logged-in Chrome) and alerts when one goes down or recovers.
 
 Since shopee_th asks the agent first, an agent outage means nearly every
 shopee_th request falls back to Bright Data, which 502s on most product pages
 (confirmed live 2026-10-04) — so an outage needs a human to look at the
 laptop, Chrome, or the tunnel. Alerts only on state changes, after
-settings.price_agent_alert_after_failures consecutive failed checks.
+settings.price_agent_alert_after_failures consecutive failed checks. A down
+agent is also reported to price_agents.pool, which then sends work to the
+other agents while any of them is up.
 """
 
 import asyncio
 import logging
 
 from app.config import settings
-from app.scrapers import http_pool
+from app.scrapers import http_pool, price_agents
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +27,11 @@ class _State:
         self.down = False
 
 
-_state = _State()
+_states: dict[str, _State] = {}
 
 
-async def check_agent() -> str | None:
+async def check_agent(base: str) -> str | None:
     """Returns None if the agent and its Chrome are healthy, else a reason."""
-    base = settings.shopee_th_price_agent_url.rstrip("/")
     client = http_pool.get_client()
     try:
         response = await client.get(f"{base}/status", timeout=15)
@@ -65,36 +66,49 @@ async def _alert(message: str) -> None:
         logger.warning("Failed to POST price agent alert to configured webhook", exc_info=True)
 
 
-async def record(reason: str | None) -> None:
+async def record(base: str, reason: str | None) -> None:
+    state = _states.setdefault(base, _State())
     if reason is None:
-        if _state.down:
-            await _alert("shopee_th price agent has recovered")
-        _state.failures = 0
-        _state.down = False
+        if state.down:
+            price_agents.pool.down.discard(base)
+            await _alert(f"shopee_th price agent {base} has recovered")
+        state.failures = 0
+        state.down = False
         return
-    _state.failures += 1
-    logger.info("price agent check failed (%d in a row): %s", _state.failures, reason)
-    if not _state.down and _state.failures >= settings.price_agent_alert_after_failures:
-        _state.down = True
-        await _alert(
-            f"shopee_th price agent is DOWN: {reason}. shopee_th requests now fall back to Bright Data "
-            "and will mostly fail — check the laptop is on, Chrome is running and logged in, "
-            "scripts/price_agent_watchdog.ps1 is running, and the Tailscale funnel is up."
+    state.failures += 1
+    logger.info("price agent %s check failed (%d in a row): %s", base, state.failures, reason)
+    if not state.down and state.failures >= settings.price_agent_alert_after_failures:
+        state.down = True
+        price_agents.pool.down.add(base)
+        others_up = [u for u in price_agents.agent_urls() if u != base and u not in price_agents.pool.down]
+        impact = (
+            f"Its work now goes to {len(others_up)} other agent(s)"
+            if others_up
+            else "All shopee_th requests now fall back to Bright Data and will mostly fail"
         )
+        await _alert(
+            f"shopee_th price agent {base} is DOWN: {reason}. {impact} — check that machine "
+            "is on, Chrome is running and logged in, scripts/price_agent_watchdog.ps1 is running, "
+            "and the Tailscale funnel is up."
+        )
+
+
+async def _check_and_record(base: str) -> None:
+    try:
+        await record(base, await check_agent(base))
+    except Exception:
+        logger.warning("price agent %s check itself failed", base, exc_info=True)
 
 
 async def _run() -> None:
     while True:
-        try:
-            await record(await check_agent())
-        except Exception:
-            logger.warning("price agent check itself failed", exc_info=True)
+        await asyncio.gather(*(_check_and_record(base) for base in price_agents.agent_urls()))
         await asyncio.sleep(settings.price_agent_check_interval_seconds)
 
 
 def start() -> None:
     global _task
-    if settings.shopee_th_price_agent_url and _task is None:
+    if price_agents.agent_urls() and _task is None:
         _task = asyncio.create_task(_run())
 
 

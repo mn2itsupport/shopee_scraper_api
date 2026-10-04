@@ -282,6 +282,12 @@ class Settings(BaseSettings):
     # Chrome directly when deployed. The token is the shared secret both
     # sides use (the agent checks it, the API sends it as X-Agent-Token).
     shopee_th_price_agent_url: str = ""
+    # Several agents (one per machine, each with its own Shopee login),
+    # comma-separated; each URL goes to whichever agent is free, and to the
+    # next one if that agent fails (app/scrapers/price_agents.py). When set
+    # it replaces shopee_th_price_agent_url; empty = that single agent.
+    # All agents share shopee_th_price_agent_token.
+    shopee_th_price_agent_urls: str = ""
     shopee_th_price_agent_token: str = ""
     # API-side monitor of that agent (app/scrapers/price_agent_monitor.py):
     # polls its /status and POSTs {"text"/"content": ...} (Slack- and
