@@ -16,6 +16,9 @@ Start-Process $chrome -ArgumentList @(
     "--remote-debugging-port=9222",
     "--remote-debugging-address=127.0.0.1",
     "--user-data-dir=`"$profile`"",
+    # Chrome's built-in Gemini panel (gemini.google.com/glic) loads itself in
+    # this profile and was present when connect_over_cdp hung on 2026-10-08.
+    "--disable-features=Glic,GlicRollout",
     "https://shopee.co.th"
 )
 Write-Host "Chrome started. Log into Shopee TH there if you haven't, then leave it open."
