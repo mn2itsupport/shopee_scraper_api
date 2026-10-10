@@ -268,6 +268,12 @@ class Settings(BaseSettings):
     # every URL. No effect unless shopee_th_price_agent_url or
     # shopee_th_real_chrome_cdp_url is set.
     shopee_th_price_agent_first: bool = True
+    # In agent-first mode, how long the Bright Data fallback may take before
+    # the request fails. Unbounded, a stalled unlocker call plus the
+    # registry's retry ran every agent outage into the 240s total timeout
+    # (2026-10-03..08 usage_logs). Bright Data answered TH in ~15-30s when
+    # it answered at all.
+    shopee_th_brightdata_fallback_timeout_seconds: int = 60
     # CDP endpoint of a real, human-logged-in Chrome (started via
     # scripts/launch_real_chrome_th.ps1, e.g. "http://127.0.0.1:9222"). When
     # set, the price probe reads pdp/get_pc from that Chrome instead of the

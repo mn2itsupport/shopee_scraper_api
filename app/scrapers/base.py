@@ -24,6 +24,12 @@ def accept_language_for(locale: str) -> str:
 class ScraperError(Exception):
     """Raised for a failure that isn't a CAPTCHA/anti-bot wall (see CaptchaBlockedError)."""
 
+    # An adapter sets this False on an instance when it knows an immediate
+    # retry would take the same failing path (e.g. shopee_th with every price
+    # agent down) — registry._scrape_attempts then re-raises at once instead
+    # of spending the rest of SCRAPE_TOTAL_TIMEOUT_SECONDS on it.
+    retryable = True
+
 
 class ScrapeTimeoutError(ScraperError):
     """Raised when one whole scrape (all retries together) exceeds
@@ -50,6 +56,9 @@ class ProductNotFoundError(ScraperError):
 
 class CaptchaBlockedError(Exception):
     """Raised when an adapter detects a CAPTCHA/anti-bot interstitial instead of real data."""
+
+    # Same meaning as ScraperError.retryable.
+    retryable = True
 
 
 class BaseScraper(ABC):
