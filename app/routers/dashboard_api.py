@@ -114,6 +114,84 @@ def kpi_stats(admin: None = Depends(require_admin)) -> dict:
     return _kpi_counts(api_key_id=None)
 
 
+# Outcomes of a request that actually reached a scraper. rate_limited and
+# quota_exceeded are rejected before scraping, so they say nothing about how
+# healthy a site adapter is and are left out of its success rate.
+_SCRAPE_OUTCOMES = ("success", "failed", "captcha_blocked")
+_PAGE_SIZE = 1000  # PostgREST's default max rows per response
+
+
+def _fetch_site_logs(since: datetime, until: datetime | None = None) -> list[dict]:
+    """All usage_logs rows in the window, paged past PostgREST's row cap so
+    success rates stay correct at volume."""
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        query = (
+            get_supabase()
+            .table("usage_logs")
+            .select("status, response_time_ms, sites(site_key, display_name)")
+            .gte("created_at", since.isoformat())
+        )
+        if until:
+            query = query.lte("created_at", until.isoformat())
+        page = query.order("created_at").range(offset, offset + _PAGE_SIZE - 1).execute().data or []
+        rows.extend(page)
+        if len(page) < _PAGE_SIZE:
+            return rows
+        offset += _PAGE_SIZE
+
+
+def _percentile(sorted_values: list[int], pct: float) -> int | None:
+    if not sorted_values:
+        return None
+    index = min(len(sorted_values) - 1, max(0, round(pct / 100 * len(sorted_values)) - 1))
+    return sorted_values[index]
+
+
+def _site_health(logs: list[dict]) -> list[dict]:
+    """Per-site success rate and latency, worst success rate first."""
+    by_site: dict[str, dict] = {}
+    for row in logs:
+        if row["status"] not in _SCRAPE_OUTCOMES:
+            continue
+        site = row.get("sites") or {}
+        key = site.get("site_key") or "unknown"
+        entry = by_site.setdefault(
+            key,
+            {"site_key": key, "display_name": site.get("display_name") or key, "latencies": [], **{s: 0 for s in _SCRAPE_OUTCOMES}},
+        )
+        entry[row["status"]] += 1
+        if row["status"] == "success" and row.get("response_time_ms") is not None:
+            entry["latencies"].append(row["response_time_ms"])
+
+    result = []
+    for entry in by_site.values():
+        latencies = sorted(entry.pop("latencies"))
+        attempts = sum(entry[s] for s in _SCRAPE_OUTCOMES)
+        result.append(
+            {
+                **entry,
+                "attempts": attempts,
+                "success_rate": round(100 * entry["success"] / attempts, 1),
+                "avg_ms": round(sum(latencies) / len(latencies)) if latencies else None,
+                "p95_ms": _percentile(latencies, 95),
+            }
+        )
+    return sorted(result, key=lambda r: (r["success_rate"], r["site_key"]))
+
+
+@router.get("/stats/sites")
+def site_health_stats(
+    days: int = Query(1, ge=1, le=365),
+    start: datetime | None = None,
+    end: datetime | None = None,
+    admin: None = Depends(require_admin),
+) -> list[dict]:
+    since = start or (datetime.now(timezone.utc) - timedelta(days=days))
+    return _site_health(_fetch_site_logs(since, until=end))
+
+
 @router.get("/me/daily")
 def my_daily_stats(api_key: str, days: int = Query(30, le=365)) -> list[dict]:
     api_key_id = _resolve_api_key_id(api_key)

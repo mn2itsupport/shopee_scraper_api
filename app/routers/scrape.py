@@ -94,7 +94,9 @@ async def _scrape_one(site_key: str, site_id: str, url: str, key: AuthedKey) -> 
             error_message = str(exc)
         finally:
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            usage_log_id = await asyncio.to_thread(log_usage, key.api_key_id, site_id, url, status, elapsed_ms)
+            usage_log_id = await asyncio.to_thread(
+                log_usage, key.api_key_id, site_id, url, status, elapsed_ms, error_message
+            )
 
         if pdp is not None:
             if settings.store_pdp_data:

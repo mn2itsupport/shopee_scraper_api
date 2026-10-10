@@ -66,6 +66,10 @@ create table if not exists usage_logs (
     created_at timestamptz not null default now()
 );
 
+-- Why a failed/captcha_blocked request failed (null on success). Added after
+-- launch; safe to re-run on an existing database.
+alter table usage_logs add column if not exists error_message text;
+
 create index if not exists idx_usage_logs_key_time on usage_logs (api_key_id, created_at);
 create index if not exists idx_usage_logs_time on usage_logs (created_at);
 
