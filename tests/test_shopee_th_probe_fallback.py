@@ -15,7 +15,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
 
 from app.config import settings  # noqa: E402
 from app.models.schemas import PDPData  # noqa: E402
-from app.scrapers.base import ProductNotFoundError, ScraperError  # noqa: E402
+from app.scrapers.base import CaptchaBlockedError, ProductNotFoundError, ScraperError  # noqa: E402
 from app.scrapers.sites import shopee_th  # noqa: E402
 from app.scrapers.sites.shopee_th import ShopeeTHScraper  # noqa: E402
 
@@ -357,3 +357,64 @@ async def test_agent_first_off_without_agent_configured(scraper, monkeypatch, _a
     result = await scraper.fetch_pdp_via_curl_cffi(URL)
 
     assert result.title == "curl title"
+
+
+@pytest.fixture
+def _agent_down(monkeypatch, _agent_first):
+    monkeypatch.setattr(shopee_th.price_agents.pool, "down", {"https://agent.invalid"})
+
+
+@pytest.mark.asyncio
+async def test_agent_first_skips_agent_when_monitor_says_down(scraper, monkeypatch, _agent_down):
+    curl_pdp = PDPData(site_key="shopee_th", product_url=URL, title="curl title", raw={"data": {"item": {}}})
+    probe = AsyncMock(return_value=GET_PC_BODY)
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(return_value=curl_pdp))
+    monkeypatch.setattr(scraper, "_select_price_probe", lambda url: probe())
+
+    result = await scraper.fetch_pdp_via_curl_cffi(URL)
+
+    assert result.title == "curl title"
+    probe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_down_bright_data_failure_is_not_retryable(scraper, monkeypatch, _agent_down):
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(side_effect=ScraperError("HTTP 502")))
+
+    with pytest.raises(ScraperError, match="HTTP 502") as excinfo:
+        await scraper.fetch_pdp_via_curl_cffi(URL)
+    assert excinfo.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_agent_down_bright_data_captcha_is_not_retryable(scraper, monkeypatch, _agent_down):
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(side_effect=CaptchaBlockedError("wall")))
+
+    with pytest.raises(CaptchaBlockedError) as excinfo:
+        await scraper.fetch_pdp_via_curl_cffi(URL)
+    assert excinfo.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_bright_data_fallback_is_capped(scraper, monkeypatch, _agent_down):
+    monkeypatch.setattr(settings, "shopee_th_brightdata_fallback_timeout_seconds", 0.05)
+
+    async def stalls(url):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", stalls)
+
+    with pytest.raises(ScraperError, match="no answer within") as excinfo:
+        await asyncio.wait_for(scraper.fetch_pdp_via_curl_cffi(URL), timeout=1)
+    assert excinfo.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_agent_up_bright_data_failure_stays_retryable(scraper, monkeypatch, _agent_first):
+    monkeypatch.setattr(shopee_th.price_agents.pool, "down", set())
+    monkeypatch.setattr(scraper, "_curl_cffi_fetch", AsyncMock(side_effect=ScraperError("HTTP 502")))
+    monkeypatch.setattr(scraper, "_select_price_probe", lambda url: AsyncMock(return_value=None)())
+
+    with pytest.raises(ScraperError) as excinfo:
+        await scraper.fetch_pdp_via_curl_cffi(URL)
+    assert excinfo.value.retryable is True

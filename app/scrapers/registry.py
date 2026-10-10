@@ -123,6 +123,8 @@ async def _scrape_attempts(site_key: str, url: str) -> PDPData:
                 return await scraper.fetch_pdp(context, url)
         except CaptchaBlockedError as exc:
             last_error = exc
+            if not exc.retryable:
+                raise
             # Backoff before the next fresh context; jitter on top so concurrent
             # retries across different requests don't all re-attempt in lockstep.
             # Wider than a plain rate-limit backoff needs: Shopee's wall is a
@@ -137,7 +139,7 @@ async def _scrape_attempts(site_key: str, url: str) -> PDPData:
             raise
         except ScraperError as exc:
             last_error = exc
-            if scraper_error_retries_left <= 0:
+            if scraper_error_retries_left <= 0 or not exc.retryable:
                 raise
             scraper_error_retries_left -= 1
             # Short backoff — unlike CaptchaBlockedError above, this isn't

@@ -10,7 +10,7 @@ import httpx
 from app.config import settings
 from app.models.schemas import PDPData
 from app.scrapers import price_agents
-from app.scrapers.base import ScraperError
+from app.scrapers.base import CaptchaBlockedError, ScraperError
 from app.scrapers.sites._shopee_common import _ITEM_NOT_FOUND_ERROR_CODE, ShopeeScraper, _normalize_shopee_url
 
 logger = logging.getLogger(__name__)
@@ -304,12 +304,16 @@ class ShopeeTHScraper(ShopeeScraper):
         # this code) is also handed the product page, not e.g. a get_pc URL.
         url = _normalize_shopee_url(url)
         if self._price_agent_first():
-            pdp = await self._fetch_via_price_agent_first(url)
-            if pdp is not None:
-                return pdp
+            agents_down = self._every_agent_down()
+            if agents_down:
+                logger.info("shopee_th every price agent is down; going straight to Bright Data for %s", url)
+            else:
+                pdp = await self._fetch_via_price_agent_first(url)
+                if pdp is not None:
+                    return pdp
             # Agent had nothing usable: Bright Data alone, without queueing
             # this URL on the agent a second time.
-            pdp = await self._curl_cffi_fetch(url)
+            pdp = await self._bright_data_fallback(url, retryable=not agents_down)
             return pdp.model_copy(update={"raw": _dedupe_curl_cffi_legacy_keys(pdp.raw)})
 
         patch: dict | None = None
@@ -375,6 +379,31 @@ class ShopeeTHScraper(ShopeeScraper):
             and settings.shopee_th_price_agent_first
             and (price_agents.agent_urls() or settings.shopee_th_real_chrome_cdp_url)
         )
+
+    @staticmethod
+    def _every_agent_down() -> bool:
+        """True when agents are configured and price_agent_monitor has marked
+        all of them down. Asking one anyway only adds a DNS error or a 40s
+        hang before the same Bright Data fallback (the 2026-10-09 outage)."""
+        urls = price_agents.agent_urls()
+        return bool(urls) and all(u in price_agents.pool.down for u in urls)
+
+    async def _bright_data_fallback(self, url: str, *, retryable: bool) -> PDPData:
+        """_curl_cffi_fetch capped at shopee_th_brightdata_fallback_timeout_seconds.
+        retryable=False (no agent up) marks a failure so the registry doesn't
+        rerun this same Bright Data call: with no agent to try again, a retry
+        only pushed the request on into the 240s total timeout."""
+        timeout_s = settings.shopee_th_brightdata_fallback_timeout_seconds
+        try:
+            return await asyncio.wait_for(self._curl_cffi_fetch(url), timeout=timeout_s)
+        except asyncio.TimeoutError as exc:
+            error = ScraperError(f"Bright Data fallback gave no answer within {timeout_s}s")
+            error.retryable = retryable
+            raise error from exc
+        except (ScraperError, CaptchaBlockedError) as exc:
+            if not retryable:
+                exc.retryable = False
+            raise
 
     async def _fetch_via_price_agent_first(self, url: str) -> PDPData | None:
         """Asks the price agent before Bright Data. Confirmed live 2026-10-04

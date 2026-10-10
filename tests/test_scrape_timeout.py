@@ -58,3 +58,50 @@ def test_endpoint_returns_504_on_timeout_and_logs_failed(monkeypatch):
     assert "timed out" in response.json()["detail"]
     # usage_logs.status only allows a fixed set of values, so a timeout is stored as "failed".
     assert logged and logged[0][3] == "failed"
+
+
+class _OneShotScraper:
+    """Counts fetch attempts; every attempt raises the given error."""
+
+    browser_mode_override = "curl_cffi"
+
+    def __init__(self, error):
+        self.error = error
+        self.calls = 0
+
+    async def fetch_pdp_via_curl_cffi(self, url):
+        self.calls += 1
+        raise self.error
+
+
+def _run_attempts(monkeypatch, error):
+    scraper = _OneShotScraper(error)
+    monkeypatch.setattr(registry, "get_scraper", lambda site_key: scraper)
+    monkeypatch.setattr(settings, "pre_scrape_jitter_ms_max", 0)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(registry.asyncio, "sleep", lambda *_: real_sleep(0))
+    with pytest.raises(type(error)):
+        asyncio.run(registry._scrape_attempts("shopee_th", "https://shopee.co.th/x-i.1.2"))
+    return scraper.calls
+
+
+def test_scraper_error_retried_once_by_default(monkeypatch):
+    from app.scrapers.base import ScraperError
+
+    assert _run_attempts(monkeypatch, ScraperError("HTTP 502")) == 2
+
+
+def test_non_retryable_scraper_error_not_retried(monkeypatch):
+    from app.scrapers.base import ScraperError
+
+    error = ScraperError("HTTP 502")
+    error.retryable = False
+    assert _run_attempts(monkeypatch, error) == 1
+
+
+def test_non_retryable_captcha_not_retried(monkeypatch):
+    from app.scrapers.base import CaptchaBlockedError
+
+    error = CaptchaBlockedError("wall")
+    error.retryable = False
+    assert _run_attempts(monkeypatch, error) == 1
